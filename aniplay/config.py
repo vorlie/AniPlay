@@ -7,7 +7,7 @@ DB_PATH = BASE_DIR / "aniplay.db"
 WEB_DIR = BASE_DIR / "aniplay" / "web"
 
 # Library Settings
-DEFAULT_LIBRARY_PATH = r"\\wsl.localhost\Ubuntu\mnt\wsl\PHYSICALDRIVE1p1\Jellyfin\Seriale"
+DEFAULT_LIBRARY_PATH = r"PATH TO YOUR LIBRARY"
 
 # Supported Formats (MPV supports almost everything, but these are for scanning)
 VIDEO_EXTENSIONS = {
