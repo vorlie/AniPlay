@@ -22,6 +22,15 @@ Note: The name "AniPlay" is purely functional and likely shared by dozens of oth
 - VLC Media Player (optional, for VLC desktop mode)
 - MPV (optional, for MPV desktop mode)
 
+## WSL / Linux Partitioned Drives
+
+If your media library is stored on a Linux-partitioned drive (e.g., ext4), you must mount it using WSL before AniPlay can access the files.
+
+> "\\.\PHYSICALDRIVE1" might be different for you, use `Get-CimInstance -Query "SELECT * FROM Win32_DiskDrive"` to find the correct drive.
+```bash
+wsl --mount \\.\PHYSICALDRIVE1 --partition 1 --type ext4
+```
+
 ## Installation
 
 1. Install dependencies using uv:
