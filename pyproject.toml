@@ -1,0 +1,19 @@
+[project]
+name = "aniplay"
+version = "0.1.0"
+description = "Personal media server and player for anime libraries."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "pypresence>=4.6.1",
+    "pyqt6>=6.10.2",
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+    "python-mpv>=1.0.8",
+    "qasync>=0.28.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "aiofiles>=24.1.0",
+    "jinja2>=3.1.4",
+]

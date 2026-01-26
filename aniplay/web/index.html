@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AniPlay Web - Premium Anime Streaming</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0" />
+</head>
+<body>
+    <div class="glass-bg"></div>
+    
+    <nav class="navbar">
+        <div class="logo">AniPlay<span>Web</span></div>
+        <div class="search-box">
+            <input type="text" id="seriesSearch" placeholder="Search your library...">
+        </div>
+        <div class="nav-links">
+            <button id="settingsBtn" class="btn-icon" title="Settings"><span class="material-symbols-rounded">settings</span></button>
+            <button id="refreshLibrary" class="btn-icon" title="Refresh"><span class="material-symbols-rounded">refresh</span></button>
+        </div>
+    </nav>
+
+    <main class="container">
+        <section id="hero" class="hero hidden">
+            <div class="hero-content">
+                <h1 id="heroTitle">Series Title</h1>
+                <p id="heroStats">24 Episodes • Season 1</p>
+                <div class="hero-actions">
+                    <button id="playLatest" class="btn-primary"><span class="material-symbols-rounded">play_arrow</span> Continue Watching</button>
+                </div>
+            </div>
+            <div id="heroPoster" class="hero-poster"></div>
+        </section>
+
+        <section class="section-title">
+            <h2>Your Library</h2>
+        </section>
+
+        <div id="seriesGrid" class="series-grid">
+            <!-- Series cards will be injected here -->
+            <div class="loader">Loading your library...</div>
+        </div>
+    </main>
+
+    <!-- Episode Modal -->
+    <div id="episodeModal" class="modal hidden">
+        <div class="modal-content glass">
+            <span class="close-modal btn-icon-small"><span class="material-symbols-rounded">close</span></span>
+            <div class="modal-header">
+                <h2 id="modalSeriesTitle">Series Name</h2>
+            </div>
+            <div id="tabContainer" class="tab-container">
+                <!-- Season tabs will be injected here -->
+            </div>
+            <div id="episodeList" class="episode-list">
+                <!-- Episodes will be injected here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Pre-Play Modal -->
+    <div id="prePlayModal" class="modal hidden">
+        <div class="modal-content glass">
+            <span class="close-preplay btn-icon-small"><span class="material-symbols-rounded">close</span></span>
+            <div class="modal-header">
+                <h2 id="prePlayTitle">Configure Playback</h2>
+                <p id="prePlaySubtitle" class="text-dim">Episode Title</p>
+            </div>
+            
+            <div class="config-section">
+                <h4>Audio Track</h4>
+                <div id="prePlayAudioList" class="track-grid"></div>
+            </div>
+
+            <div class="config-section">
+                <h4>Subtitles</h4>
+                <div id="prePlaySubList" class="track-grid"></div>
+            </div>
+
+            <div class="preplay-actions">
+                <button id="prePlayStartBtn" class="btn-primary btn-large"><span class="material-symbols-rounded">play_arrow</span> Start Streaming</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="modal hidden">
+        <div class="modal-content glass">
+            <span class="close-settings btn-icon-small"><span class="material-symbols-rounded">close</span></span>
+            <div class="modal-header">
+                <h2>Settings</h2>
+            </div>
+            <div class="settings-list">
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <h4>Always start from 0:00</h4>
+                        <p class="text-dim">Ignore progress and start every episode from the beginning.</p>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="settingAlwaysZero">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+                <div class="setting-item">
+                    <div class="setting-info">
+                        <h4>Disable Progress Sync</h4>
+                        <p class="text-dim">Stop saving your watch progress to the server.</p>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="settingDisableSync">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Video Player Overlay -->
+    <div id="playerOverlay" class="player-overlay hidden">
+        <div class="video-view">
+            <video id="mainVideo" crossorigin="anonymous">
+                Your browser does not support the video tag.
+            </video>
+            <div id="videoLoader" class="video-loader hidden">
+                <div class="spinner"></div>
+                <p>Transcoding...</p>
+            </div>
+        </div>
+
+        <div class="player-ui-overlay">
+            <div class="player-top-bar">
+                <h3 id="playerSubtitle">S01E01 - Episode Title</h3>
+                <div class="player-controls-top">
+                    <button id="nerdStatsBtn" class="btn-icon" title="Stats for Nerds"><span class="material-symbols-rounded">monitoring</span></button>
+                    <button id="trackSelectorBtn" class="btn-icon" title="Select Tracks"><span class="material-symbols-rounded">tune</span></button>
+                    <button class="btn close-player"><span class="material-symbols-rounded">close</span> Close</button>
+                </div>
+            </div>
+            
+            <div id="trackMenu" class="track-menu hidden glass">
+                <h4>Audio Tracks</h4>
+                <div id="audioTrackList" class="track-list"></div>
+                <h4>Subtitles</h4>
+                <div id="subTrackList" class="track-list"></div>
+            </div>
+
+            <div class="custom-controls">
+                <div class="progress-container">
+                    <input type="range" id="progressBar" value="0" step="0.1" min="0">
+                </div>
+                <div class="control-row">
+                    <div class="controls-left">
+                        <button id="playPauseBtn"><span class="material-symbols-rounded">pause</span></button>
+                        <button id="nextEpBtn" class="btn-icon" title="Next Episode"><span class="material-symbols-rounded">skip_next</span></button>
+                        <span id="timeDisplay">00:00 / 00:00</span>
+                    </div>
+                    <div class="controls-right">
+                        <button id="fullscreenBtn"><span class="material-symbols-rounded">fullscreen</span></button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Stats for Nerds -->
+            <div id="nerdStats" class="nerd-stats hidden glass">
+                <div class="stats-header">
+                    <span>Stats for Nerds</span>
+                    <button id="closeStatsBtn" class="btn-icon-small"><span class="material-symbols-rounded">close</span></button>
+                </div>
+                <div id="statsContent" class="stats-grid">
+                    <!-- Stats will be injected here -->
+                </div>
+            </div>
+
+            <!-- Up Next Popup -->
+            <div id="upNextPopup" class="up-next-popup hidden glass">
+                <div class="up-next-content">
+                    <span class="text-dim">UP NEXT</span>
+                    <h4 id="upNextTitle">Episode Name</h4>
+                    <div class="up-next-actions">
+                        <button id="upNextPlayBtn" class="btn-primary"><span class="material-symbols-rounded">play_arrow</span> Play Now</button>
+                        <button id="upNextConfigBtn" class="btn-icon-small"><span class="material-symbols-rounded">tune</span></button>
+                        <button id="upNextDismissBtn" class="btn-icon-small"><span class="material-symbols-rounded">close</span></button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

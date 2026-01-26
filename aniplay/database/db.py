@@ -1,0 +1,302 @@
+import aiosqlite
+#import sqlite3
+from typing import List, Optional, Any  # noqa: F401
+from datetime import datetime
+from .models import Series, Episode, WatchProgress, MediaTrack
+from ..config import DB_PATH
+
+class DatabaseManager:
+    def __init__(self, db_path: str = str(DB_PATH)):
+        self.db_path = db_path
+
+    async def initialize(self):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON")
+            
+            # Series table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS series (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    path TEXT NOT NULL UNIQUE,
+                    thumbnail_path TEXT,
+                    date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Episodes table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS episodes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    series_id INTEGER NOT NULL,
+                    filename TEXT NOT NULL,
+                    path TEXT NOT NULL UNIQUE,
+                    duration REAL DEFAULT 0,
+                    episode_number INTEGER,
+                    season_number INTEGER,
+                    folder_name TEXT,
+                    date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (series_id) REFERENCES series (id) ON DELETE CASCADE
+                )
+            """)
+            
+            # Watch progress table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS watch_progress (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    episode_id INTEGER NOT NULL UNIQUE,
+                    timestamp REAL DEFAULT 0,
+                    last_watched TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    completed BOOLEAN DEFAULT 0,
+                    FOREIGN KEY (episode_id) REFERENCES episodes (id) ON DELETE CASCADE
+                )
+            """)
+            # Media tracks table (audio/subs/video)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS media_tracks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    episode_id INTEGER NOT NULL,
+                    stream_index INTEGER NOT NULL,
+                    track_type TEXT NOT NULL,
+                    codec TEXT,
+                    language TEXT,
+                    title TEXT,
+                    sub_index INTEGER,
+                    FOREIGN KEY (episode_id) REFERENCES episodes (id) ON DELETE CASCADE
+                )
+            """)
+            
+            # Migrations
+            # Check for folder_name column in episodes
+            async with db.execute("PRAGMA table_info(episodes)") as cursor:
+                columns = [row[1] for row in await cursor.fetchall()]
+                if 'folder_name' not in columns:
+                    await db.execute("ALTER TABLE episodes ADD COLUMN folder_name TEXT")
+            
+            await db.commit()
+
+    # Series Operations
+    
+    async def add_series(self, series: Series) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO series (name, path, thumbnail_path) VALUES (?, ?, ?)",
+                (series.name, series.path, series.thumbnail_path)
+            )
+            await db.commit()
+            if cursor.lastrowid:
+                series.id = cursor.lastrowid
+                return cursor.lastrowid
+            
+            # If ignore triggered, find the existing id
+            async with db.execute("SELECT id FROM series WHERE path = ?", (series.path,)) as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else -1
+    async def get_all_series(self) -> List[Series]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM series ORDER BY name") as cursor:
+                rows = await cursor.fetchall()
+                return [Series(
+                    id=row['id'],
+                    name=row['name'],
+                    path=row['path'],
+                    thumbnail_path=row['thumbnail_path'],
+                    date_added=datetime.fromisoformat(row['date_added']) if isinstance(row['date_added'], str) else row['date_added']
+                ) for row in rows]
+
+    async def get_series(self, series_id: int) -> Optional[Series]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM series WHERE id = ?", (series_id,)) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    return Series(
+                        id=row['id'],
+                        name=row['name'],
+                        path=row['path'],
+                        thumbnail_path=row['thumbnail_path'],
+                        date_added=datetime.fromisoformat(row['date_added']) if isinstance(row['date_added'], str) else row['date_added']
+                    )
+                return None
+
+    async def update_series_poster(self, series_id: int, poster_path: str):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE series SET thumbnail_path = ? WHERE id = ?",
+                (poster_path, series_id)
+            )
+            await db.commit()
+
+    # Episode Operations
+
+    async def add_episode(self, episode: Episode) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """INSERT OR IGNORE INTO episodes 
+                   (series_id, filename, path, duration, episode_number, season_number, folder_name) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (episode.series_id, episode.filename, episode.path, episode.duration, 
+                 episode.episode_number, episode.season_number, episode.folder_name)
+            )
+            await db.commit()
+            if cursor.lastrowid:
+                episode.id = cursor.lastrowid
+                return cursor.lastrowid
+            
+            async with db.execute("SELECT id FROM episodes WHERE path = ?", (episode.path,)) as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else -1
+
+    async def update_episode_metadata(self, episode: Episode):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """UPDATE episodes SET 
+                   episode_number = ?, 
+                   season_number = ?, 
+                   folder_name = ? 
+                   WHERE path = ?""",
+                (episode.episode_number, episode.season_number, episode.folder_name, episode.path)
+            )
+            await db.commit()
+
+    async def get_episodes_for_series(self, series_id: int) -> List[Episode]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM episodes WHERE series_id = ? ORDER BY season_number, episode_number, filename", (series_id,)) as cursor:
+                rows = await cursor.fetchall()
+                return [Episode(
+                    id=row['id'],
+                    series_id=row['series_id'],
+                    filename=row['filename'],
+                    path=row['path'],
+                    duration=row['duration'],
+                    episode_number=row['episode_number'],
+                    season_number=row['season_number'],
+                    folder_name=row['folder_name']
+                ) for row in rows]
+
+    async def get_episode_by_id(self, episode_id: int) -> Optional[Episode]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM episodes WHERE id = ?", (episode_id,)) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    return Episode(
+                        id=row['id'],
+                        series_id=row['series_id'],
+                        filename=row['filename'],
+                        path=row['path'],
+                        duration=row['duration'],
+                        episode_number=row['episode_number'],
+                        season_number=row['season_number'],
+                        folder_name=row['folder_name']
+                    )
+                return None
+
+    # Media Track Operations
+
+    async def add_media_track(self, track: MediaTrack):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO media_tracks 
+                   (episode_id, stream_index, track_type, codec, language, title, sub_index)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (track.episode_id, track.index, track.type, track.codec, track.language, track.title, track.sub_index)
+            )
+            await db.commit()
+
+    async def clear_episode_tracks(self, episode_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM media_tracks WHERE episode_id = ?", (episode_id,))
+            await db.commit()
+
+    async def get_tracks_for_episode(self, episode_id: int) -> List[MediaTrack]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM media_tracks WHERE episode_id = ?", (episode_id,)) as cursor:
+                rows = await cursor.fetchall()
+                return [MediaTrack(
+                    id=row['id'],
+                    episode_id=row['episode_id'],
+                    index=row['stream_index'],
+                    type=row['track_type'],
+                    codec=row['codec'],
+                    language=row['language'],
+                    title=row['title'],
+                    sub_index=row['sub_index']
+                ) for row in rows]
+
+    async def update_episode_duration(self, episode_id: int, duration: float):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE episodes SET duration = ? WHERE id = ?", (duration, episode_id))
+            await db.commit()
+
+    # Progress Operations
+
+    async def update_progress(self, progress: WatchProgress):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO watch_progress (episode_id, timestamp, last_watched, completed)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(episode_id) DO UPDATE SET
+                   timestamp = excluded.timestamp,
+                   last_watched = excluded.last_watched,
+                   completed = excluded.completed""",
+                (progress.episode_id, progress.timestamp, datetime.now(), int(progress.completed))
+            )
+            await db.commit()
+
+    async def get_progress(self, episode_id: int) -> Optional[WatchProgress]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM watch_progress WHERE episode_id = ?", (episode_id,)) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    return WatchProgress(
+                        id=row['id'],
+                        episode_id=row['episode_id'],
+                        timestamp=row['timestamp'],
+                        last_watched=datetime.fromisoformat(row['last_watched']) if isinstance(row['last_watched'], str) else row['last_watched'],
+                        completed=bool(row['completed'])
+                    )
+                return None
+
+    async def mark_episode_watched(self, episode_id: int, watched: bool):
+        async with aiosqlite.connect(self.db_path) as db:
+            if watched:
+                # Mark as completed (100% timestamp)
+                await db.execute(
+                    """INSERT INTO watch_progress (episode_id, timestamp, last_watched, completed)
+                       SELECT id, duration, ?, 1 FROM episodes WHERE id = ?
+                       ON CONFLICT(episode_id) DO UPDATE SET
+                       timestamp = excluded.timestamp,
+                       last_watched = excluded.last_watched,
+                       completed = 1""",
+                    (datetime.now(), episode_id)
+                )
+            else:
+                # Remove progress or mark as 0
+                await db.execute("DELETE FROM watch_progress WHERE episode_id = ?", (episode_id,))
+            await db.commit()
+
+    async def mark_series_watched(self, series_id: int, watched: bool):
+        async with aiosqlite.connect(self.db_path) as db:
+            if watched:
+                # Mark all episodes as completed
+                await db.execute(
+                    """INSERT INTO watch_progress (episode_id, timestamp, last_watched, completed)
+                       SELECT id, duration, ?, 1 FROM episodes WHERE series_id = ?
+                       ON CONFLICT(episode_id) DO UPDATE SET
+                       timestamp = excluded.timestamp,
+                       last_watched = excluded.last_watched,
+                       completed = 1""",
+                    (datetime.now(), series_id)
+                )
+            else:
+                # Clear all progress for this series
+                await db.execute(
+                    "DELETE FROM watch_progress WHERE episode_id IN (SELECT id FROM episodes WHERE series_id = ?)",
+                    (series_id,)
+                )
+            await db.commit()
