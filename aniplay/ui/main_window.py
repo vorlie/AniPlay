@@ -21,32 +21,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("AniPlay")
         self.resize(1280, 850)
-        self.setStyleSheet("""
-            QMainWindow, QWidget#centralWidget {
-                background-color: #121212;
-                color: #ffffff;
-            }
-            QSplitter::handle {
-                background-color: #333;
-            }
-            QScrollBar:vertical {
-                border: none;
-                background: #1a1a1a;
-                width: 10px;
-                margin: 0;
-            }
-            QScrollBar::handle:vertical {
-                background: #333;
-                min-height: 20px;
-                border-radius: 5px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #444;
-            }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                height: 0px;
-            }
-        """)
+        # Theme will be handled by qdarktheme
+        self.setStyleSheet("")
 
         self.db = db_manager
         self.library = LibraryManager(self.db)
@@ -60,8 +36,8 @@ class MainWindow(QMainWindow):
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
-        self.main_layout.setSpacing(10)
-        self.main_layout.setContentsMargins(10, 10, 10, 10)
+        self.main_layout.setSpacing(15)
+        self.main_layout.setContentsMargins(15, 15, 15, 15)
 
         # 1. Player Panel (Bottom-most logic, but created first to allow syncing)
         self.player_widget = PlayerWidget()
@@ -72,55 +48,55 @@ class MainWindow(QMainWindow):
         # 2. Top Bar: Actions
         self.top_bar = QHBoxLayout()
         
-        self.scan_btn = QPushButton("Scan Library")
+        self.scan_btn = QPushButton("🔄 Scan Library")
         self.scan_btn.setFixedHeight(40)
         self.scan_btn.setStyleSheet("""
             QPushButton {
-                background-color: #3d5afe;
-                color: white;
                 font-weight: bold;
-                border-radius: 5px;
+                font-size: 13px;
                 padding: 0 20px;
+                border-radius: 8px;
             }
             QPushButton:hover {
-                background-color: #536dfe;
+                background-color: rgba(255, 255, 255, 0.1);
             }
         """)
         self.scan_btn.clicked.connect(self.scan_library)
         
-        self.mount_btn = QPushButton("Mount Drive (Admin)")
+        self.mount_btn = QPushButton("🔒 Mount Drive")
         self.mount_btn.setFixedHeight(40)
         self.mount_btn.setStyleSheet("""
             QPushButton {
-                background-color: #f44336;
-                color: white;
+                color: #f44336;
                 font-weight: bold;
-                border-radius: 5px;
+                font-size: 13px;
                 padding: 0 20px;
+                border-radius: 8px;
             }
             QPushButton:hover {
-                background-color: #ef5350;
+                background-color: rgba(244, 67, 54, 0.1);
             }
         """)
         self.mount_btn.clicked.connect(self.mount_drive)
         
         self.player_selector = QComboBox()
-        self.player_selector.addItems(["mpv", "vlc"])
+        self.player_selector.addItems(["mpv", "vlc", "embedded_vlc"])
         self.player_selector.currentTextChanged.connect(self.on_player_changed)
         self.player_selector.setCurrentText(PREFERRED_PLAYER)
         self.player_selector.setFixedHeight(40)
-        self.player_selector.setFixedWidth(100)
+        self.player_selector.setFixedWidth(150)
         self.player_selector.setStyleSheet("""
             QComboBox {
-                background-color: #2d2d2d;
-                color: white;
-                border-radius: 5px;
-                padding-left: 10px;
+                padding: 8px 15px;
+                border-radius: 8px;
+                font-size: 13px;
             }
         """)
         
         self.top_bar.addWidget(self.scan_btn)
+        self.top_bar.addSpacing(10)
         self.top_bar.addWidget(self.mount_btn)
+        self.top_bar.addSpacing(10)
         self.top_bar.addWidget(self.player_selector)
         self.top_bar.addStretch()
         
@@ -138,7 +114,8 @@ class MainWindow(QMainWindow):
         
         self.library_splitter.addWidget(self.series_widget)
         self.library_splitter.addWidget(self.episode_widget)
-        self.library_splitter.setSizes([400, 800])
+        self.library_splitter.setSizes([350, 850])
+        self.library_splitter.setHandleWidth(1)
         
         # Assemble Main Layout
         self.main_layout.addLayout(self.top_bar)
@@ -246,7 +223,6 @@ class MainWindow(QMainWindow):
     async def on_playback_finished(self):
         if self.current_episode:
             await self.save_progress(timestamp=self.player_widget._duration)
-        # Handle auto-play next?
 
     def on_player_changed(self, player_type):
         self.player_widget.player_type = player_type

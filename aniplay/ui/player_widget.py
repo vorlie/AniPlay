@@ -8,6 +8,13 @@ from PyQt6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel, QHBoxLayo
 from PyQt6.QtCore import pyqtSignal, QTimer, Qt
 import mpv
 
+from .vlc_window import VlcPlayerWindow
+
+try:
+    import vlc
+except ImportError:
+    vlc = None
+
 class PlayerWidget(QWidget):
     # Signals
     playback_started = pyqtSignal(str)
@@ -18,17 +25,37 @@ class PlayerWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.layout = QHBoxLayout(self)
-        self.layout.setContentsMargins(10, 5, 10, 5)
-        self.layout.setSpacing(15)
+        self.layout.setContentsMargins(15, 12, 15, 12)
+        self.layout.setSpacing(20)
+        
+        self.setStyleSheet("""
+            PlayerWidget {
+                background-color: rgba(0, 0, 0, 0.2);
+                border-radius: 10px;
+                border-top: 1px solid rgba(255, 255, 255, 0.1);
+            }
+        """)
         
         self.status_icon = QLabel("📺")
-        self.status_icon.setStyleSheet("font-size: 20px;")
+        self.status_icon.setStyleSheet("font-size: 28px;")
         
         self.info_label = QLabel("Ready to play")
-        self.info_label.setStyleSheet("font-weight: bold; color: #e0e0e0; font-size: 14px;")
+        self.info_label.setStyleSheet("""
+            font-weight: bold; 
+            font-size: 15px;
+            color: rgba(255, 255, 255, 0.8);
+        """)
         
         self.time_label = QLabel("00:00 / 00:00")
-        self.time_label.setStyleSheet("color: #888; font-family: 'Consolas', monospace;")
+        self.time_label.setStyleSheet("""
+            font-family: 'Consolas', monospace;
+            font-size: 14px;
+            font-weight: bold;
+            color: rgba(255, 255, 255, 0.7);
+            padding: 5px 15px;
+            background-color: rgba(0, 0, 0, 0.3);
+            border-radius: 6px;
+        """)
 
         self.layout.addWidget(self.status_icon)
         self.layout.addWidget(self.info_label, 1) 
@@ -37,21 +64,23 @@ class PlayerWidget(QWidget):
         self.player_type = "mpv"
         self.player = None
         self.external_process = None
+        self.vlc_window = None
         self._current_time = 0
         self._duration = 0
         
-        # Timer to poll MPV for progress (DOESNT WORK LOL, MPV DOESNT HAVE THATTTTT)
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self._poll_progress)
-        self.poll_timer.setInterval(1000) # Poll every second
+        self.poll_timer.setInterval(1000)
 
     def load_video(self, path: str, start_time: float = 0):
         self.shutdown() 
         
         if self.player_type == "mpv":
             self._load_mpv(path, start_time)
-        else:
+        elif self.player_type == "vlc":
             self._load_vlc(path, start_time)
+        elif self.player_type == "embedded_vlc":
+            self._load_embedded_vlc(path, start_time)
 
     def _find_executable(self, name: str) -> str:
         """Find executable in PATH or common Windows locations."""
@@ -104,6 +133,13 @@ class PlayerWidget(QWidget):
             self.external_process = subprocess.Popen(cmd)
             self.status_icon.setText("🎬")
             self.info_label.setText(f"Playing in MPV: {os.path.basename(path)}")
+            self.setStyleSheet("""
+                PlayerWidget {
+                    background-color: rgba(0, 200, 83, 0.15);
+                    border-radius: 10px;
+                    border-top: 2px solid #00c853;
+                }
+            """)
             QTimer.singleShot(1000, self._connect_ipc) # Longer delay for external
             self.playback_started.emit(os.path.basename(path))
         except FileNotFoundError:
@@ -127,10 +163,54 @@ class PlayerWidget(QWidget):
             self.external_process = subprocess.Popen(cmd)
             self.status_icon.setText("🎬")
             self.info_label.setText(f"Playing in VLC: {os.path.basename(path)}")
+            self.setStyleSheet("""
+                PlayerWidget {
+                    background-color: rgba(0, 200, 83, 0.15);
+                    border-radius: 10px;
+                    border-top: 2px solid #00c853;
+                }
+            """)
             self.playback_started.emit(os.path.basename(path))
             self.poll_timer.start()
         except FileNotFoundError:
             self.info_label.setText(f"Error: '{exe}' not found.")
+
+    def _load_embedded_vlc(self, path, start_time):
+        if not vlc:
+            self.info_label.setText("Error: python-vlc not installed")
+            return
+
+        try:
+            self.vlc_window = VlcPlayerWindow()
+            self.vlc_window.progress_updated.connect(self._on_vlc_progress)
+            self.vlc_window.playback_finished.connect(self.playback_finished.emit)
+            self.vlc_window.window_closed.connect(self.shutdown)
+            
+            self.vlc_window.show()
+            self.vlc_window.play_path(path, start_time)
+
+            self.status_icon.setText("🎬")
+            self.info_label.setText(f"Playing (VLC Window): {os.path.basename(path)}")
+            self.setStyleSheet("""
+                PlayerWidget {
+                    background-color: rgba(0, 200, 83, 0.15);
+                    border-radius: 10px;
+                    border-top: 2px solid #00c853;
+                }
+            """)
+            self.playback_started.emit(os.path.basename(path))
+            
+        except Exception as e:
+            self.info_label.setText(f"VLC Error: {e}")
+
+    def _on_vlc_progress(self, current, duration):
+        self._current_time = current
+        self._duration = duration
+        self.progress_updated.emit(current, duration)
+        
+        cur = self._format_time(current)
+        tot = self._format_time(duration)
+        self.time_label.setText(f"{cur} / {tot}")
 
     def _connect_ipc(self):
         try:
@@ -144,7 +224,7 @@ class PlayerWidget(QWidget):
     def _poll_progress(self):
         if self.player_type == "mpv":
             self._poll_mpv()
-        else:
+        elif self.player_type == "vlc":
             self._poll_vlc()
 
     def _poll_mpv(self):
@@ -200,14 +280,29 @@ class PlayerWidget(QWidget):
 
     def shutdown(self):
         self.poll_timer.stop()
+        
+        if self.vlc_window:
+            # Prevent recursion
+            win = self.vlc_window
+            self.vlc_window = None
+            win.close()
+            
         if self.player:
             self.player = None
+            
         if self.external_process:
-            # We don't kill it, just release the handle
             self.external_process = None
+            
         self.status_icon.setText("📺")
         self.info_label.setText("Select an episode to play")
         self.time_label.setText("00:00 / 00:00")
+        self.setStyleSheet("""
+            PlayerWidget {
+                background-color: rgba(0, 0, 0, 0.2);
+                border-radius: 10px;
+                border-top: 1px solid rgba(255, 255, 255, 0.1);
+            }
+        """)
 
     def _format_time(self, seconds: float) -> str:
         h = int(seconds // 3600)

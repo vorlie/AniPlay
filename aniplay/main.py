@@ -1,6 +1,7 @@
 import sys
 import asyncio
 from PyQt6.QtWidgets import QApplication
+import qdarktheme
 from qasync import QEventLoop
 import logging
 from aniplay.ui.main_window import MainWindow
@@ -15,6 +16,10 @@ logger = logging.getLogger("AniPlay")
 
 def main():
     app = QApplication(sys.argv)
+    
+    # Apply Dark Theme
+    qdarktheme.setup_theme("dark", corner_shape="rounded")
+    
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
 

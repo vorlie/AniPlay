@@ -7,7 +7,7 @@ DB_PATH = BASE_DIR / "aniplay.db"
 WEB_DIR = BASE_DIR / "aniplay" / "web"
 
 # Library Settings
-DEFAULT_LIBRARY_PATH = r"PATH TO YOUR LIBRARY"
+DEFAULT_LIBRARY_PATH = r"D:\\Media"
 
 # Supported Formats (MPV supports almost everything, but these are for scanning)
 VIDEO_EXTENSIONS = {
@@ -19,6 +19,6 @@ AUTO_SAVE_INTERVAL = 5  # seconds
 COMPLETE_THRESHOLD = 0.9  # 90% watched marks as completed
 
 # UI Settings
-PREFERRED_PLAYER = "vlc" # "mpv" or "vlc"
+PREFERRED_PLAYER = "embedded_vlc"  # "mpv", "vlc", or "embedded_vlc"
 THUMBNAIL_CACHE_DIR = BASE_DIR / "cache" / "thumbnails"
 os.makedirs(THUMBNAIL_CACHE_DIR, exist_ok=True)

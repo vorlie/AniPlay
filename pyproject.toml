@@ -16,4 +16,9 @@ dependencies = [
     "uvicorn>=0.30.0",
     "aiofiles>=24.1.0",
     "jinja2>=3.1.4",
+    "python-vlc>=3.0.21203",
+    "pyqtdarktheme",
 ]
+
+[tool.uv.sources]
+pyqtdarktheme = { git = "https://github.com/vorlie/PyQtDarkTheme.git" }

@@ -12,49 +12,51 @@ class EpisodeItem(QFrame):
         
         is_completed = progress and progress.completed
         
+        self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setStyleSheet(f"""
             #EpisodeItem {{
-                background-color: #2d2d2d;
-                border-radius: 8px;
-                border: 1px solid {"#00c853" if is_completed else "#3d3d3d"};
+                background-color: rgba(255, 255, 255, 0.02);
+                border-radius: 10px;
+                border: 1px solid {"#00c853" if is_completed else "rgba(255, 255, 255, 0.05)"};
             }}
             #EpisodeItem:hover {{
-                background-color: #333333;
+                background-color: rgba(255, 255, 255, 0.05);
                 border: 1px solid #00c853;
-            }}
-            QLabel {{
-                color: #e0e0e0;
-                background: transparent;
-            }}
-            QProgressBar {{
-                border: none;
-                background: #1a1a1a;
-                height: 4px;
-                border-radius: 2px;
-                text-align: center;
-            }}
-            QProgressBar::chunk {{
-                background-color: #00c853;
-                border-radius: 2px;
             }}
         """)
         
         self.main_layout = QHBoxLayout(self)
-        self.main_layout.setContentsMargins(15, 10, 15, 10)
-        self.main_layout.setSpacing(15)
+        self.main_layout.setContentsMargins(20, 15, 20, 15)
+        self.main_layout.setSpacing(20)
         
         # Info Container (Title + Progress)
         self.info_container = QWidget()
+        self.info_container.setStyleSheet("background: transparent;")
         self.info_layout = QVBoxLayout(self.info_container)
         self.info_layout.setContentsMargins(0, 0, 0, 0)
-        self.info_layout.setSpacing(5)
+        self.info_layout.setSpacing(8)
         
         season_str = f"S{episode.season_number:02d}" if episode.season_number is not None else ""
         ep_str = f"E{episode.episode_number:02d}" if episode.episode_number is not None else ""
         title = f"{season_str}{ep_str} - {episode.filename}".strip(" - ")
         
         self.title_label = QLabel(title)
-        self.title_label.setStyleSheet(f"font-weight: bold; {'color: #00c853;' if is_completed else ''}")
+        self.title_label.setWordWrap(False)
+        self.title_label.setStyleSheet(f"""
+            font-weight: bold; 
+            font-size: 14px;
+            background: transparent;
+            {'color: #00c853;' if is_completed else ''}
+        """)
+        # Use Qt eliding to truncate long text with ellipsis
+        from PyQt6.QtGui import QFontMetrics
+        font_metrics = self.title_label.fontMetrics()
+        # Allow reasonable width but prevent excessive text
+        max_width = 600  # Will be constrained by container anyway
+        elided_text = font_metrics.elidedText(title, Qt.TextElideMode.ElideRight, max_width)
+        if elided_text != title:
+            self.title_label.setText(elided_text)
+            self.title_label.setToolTip(title)  # Show full text on hover
         self.info_layout.addWidget(self.title_label)
 
         # Meta Layout (Duration)
@@ -62,7 +64,12 @@ class EpisodeItem(QFrame):
         if episode.duration > 0:
             duration_str = self._format_time(episode.duration)
             self.meta_label.setText(duration_str)
-            self.meta_label.setStyleSheet("color: #888; font-size: 11px;")
+            self.meta_label.setStyleSheet("""
+                font-size: 12px; 
+                color: rgba(255, 255, 255, 0.6); 
+                background: transparent;
+                margin-top: 2px;
+            """)
             self.info_layout.addWidget(self.meta_label)
         
         if progress and episode.duration and episode.duration > 0:
@@ -70,9 +77,50 @@ class EpisodeItem(QFrame):
             self.progress_bar = QProgressBar()
             self.progress_bar.setValue(percentage)
             self.progress_bar.setTextVisible(False)
+            self.progress_bar.setMaximumHeight(6)
+            self.progress_bar.setStyleSheet("""
+                QProgressBar {
+                    border: none;
+                    border-radius: 3px;
+                    background-color: rgba(0, 0, 0, 0.3);
+                }
+                QProgressBar::chunk {
+                    border-radius: 3px;
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #00c853, stop:1 #00e676);
+                }
+            """)
             self.info_layout.addWidget(self.progress_bar)
         
         self.main_layout.addWidget(self.info_container, 1)
+
+        # Status Icon/Checkmark
+        if is_completed:
+            self.check_label = QLabel("✅")
+            self.check_label.setStyleSheet("font-size: 20px; background: transparent;")
+            self.main_layout.addWidget(self.check_label)
+
+        # Play Button
+        self.play_btn = QPushButton("▶ Play")
+        self.play_btn.setFixedSize(90, 40)
+        self.play_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #00c853;
+                color: white;
+                border-radius: 8px;
+                font-weight: bold;
+                font-size: 13px;
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: #00e676;
+            }
+            QPushButton:pressed {
+                background-color: #00a040;
+            }
+        """)
+        self.play_btn.clicked.connect(lambda: self.play_clicked.emit(self.episode))
+        self.main_layout.addWidget(self.play_btn)
 
     def _format_time(self, seconds: float) -> str:
         s = int(seconds)
@@ -82,28 +130,6 @@ class EpisodeItem(QFrame):
         if hours > 0:
             return f"{hours}:{minutes:02d}:{seconds:02d}"
         return f"{minutes:02d}:{seconds:02d}"
-
-        # Status Icon/Checkmark
-        if is_completed:
-            self.check_label = QLabel("✅")
-            self.main_layout.addWidget(self.check_label)
-
-        # Play Button
-        self.play_btn = QPushButton("▶ Play")
-        self.play_btn.setFixedSize(80, 35)
-        self.play_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #00c853;
-                color: white;
-                border-radius: 5px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #00e676;
-            }
-        """)
-        self.play_btn.clicked.connect(lambda: self.play_clicked.emit(self.episode))
-        self.main_layout.addWidget(self.play_btn)
 
 class EpisodeWidget(QWidget):
     episode_selected = pyqtSignal(Episode)
@@ -115,7 +141,12 @@ class EpisodeWidget(QWidget):
         self.layout.setContentsMargins(0, 0, 0, 0)
         
         self.header = QLabel("Episodes")
-        self.header.setStyleSheet("font-size: 22px; font-weight: bold; color: #fff; margin: 10px 0;")
+        self.header.setStyleSheet("""
+            font-size: 24px; 
+            font-weight: bold; 
+            margin: 15px 0px 10px 0px;
+            color: rgba(255, 255, 255, 0.9);
+        """)
         self.layout.addWidget(self.header)
         
         # Container for the current list view or tab widget
@@ -127,7 +158,7 @@ class EpisodeWidget(QWidget):
 
     def _create_list_widget(self):
         lw = QListWidget()
-        lw.setSpacing(8)
+        lw.setSpacing(12)
         lw.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         lw.customContextMenuRequested.connect(self._show_context_menu)
         lw.setStyleSheet("""
@@ -136,7 +167,7 @@ class EpisodeWidget(QWidget):
                 border: none;
             }
             QListWidget::item {
-                border-radius: 8px;
+                border-radius: 10px;
             }
             QListWidget::item:selected {
                 background-color: transparent;
@@ -174,27 +205,7 @@ class EpisodeWidget(QWidget):
         else:
             # Tabbed view
             self.tabs = QTabWidget()
-            self.tabs.setStyleSheet("""
-                QTabWidget::pane {
-                    border: none;
-                    background: transparent;
-                }
-                QTabBar::tab {
-                    background: #2d2d2d;
-                    color: #888;
-                    padding: 8px 20px;
-                    border-top-left-radius: 8px;
-                    border-top-right-radius: 8px;
-                    margin-right: 4px;
-                }
-                QTabBar::tab:selected {
-                    background: #3d5afe;
-                    color: white;
-                }
-                QTabBar::tab:hover:!selected {
-                    background: #333;
-                }
-            """)
+            self.tabs.setStyleSheet("")
             self.container_layout.addWidget(self.tabs)
             
             # Sort groups (Main first, then S01, S02, etc, then others)
@@ -210,7 +221,7 @@ class EpisodeWidget(QWidget):
         for ep in episodes:
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, ep.id)
-            item.setSizeHint(QSize(0, 70))
+            item.setSizeHint(QSize(0, 90))
             lw.addItem(item)
             
             widget = EpisodeItem(ep, progress_map.get(ep.id))
@@ -238,16 +249,7 @@ class EpisodeWidget(QWidget):
             return
             
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #2d2d2d;
-                color: white;
-                border: 1px solid #3d3d3d;
-            }
-            QMenu::item:selected {
-                background-color: #3d5afe;
-            }
-        """)
+        menu.setStyleSheet("")
         
         mark_watched = menu.addAction("Mark as Watched")
         mark_unwatched = menu.addAction("Mark as Unwatched")

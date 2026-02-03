@@ -39,7 +39,7 @@ class DiscordManager:
             self.start_time = int(time.time())
 
         try:
-            large_image = self.vlc_image if player.lower() == "vlc" else self.mpv_image
+            large_image = self.vlc_image if player.lower() == "vlc" or player.lower() == "embedded_vlc" else self.mpv_image
             
             await self.rpc.update(
                 state=f"Watching: {episode}",
