@@ -160,6 +160,43 @@ class DatabaseManager:
             )
             await db.commit()
 
+    async def update_episode_path(self, episode_id: int, new_path: str, new_filename: str, new_folder: Optional[str], new_season: Optional[int]):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """UPDATE episodes SET 
+                   path = ?, 
+                   filename = ?, 
+                   folder_name = ?,
+                   season_number = ?
+                   WHERE id = ?""",
+                (new_path, new_filename, new_folder, new_season, episode_id)
+            )
+            await db.commit()
+
+    async def get_all_episodes(self) -> List[Episode]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM episodes") as cursor:
+                rows = await cursor.fetchall()
+                return [Episode(
+                    id=row['id'],
+                    series_id=row['series_id'],
+                    filename=row['filename'],
+                    path=row['path'],
+                    duration=row['duration'],
+                    episode_number=row['episode_number'],
+                    season_number=row['season_number'],
+                    folder_name=row['folder_name']
+                ) for row in rows]
+
+    async def update_episode_series(self, episode_id: int, new_series_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE episodes SET series_id = ? WHERE id = ?",
+                (new_series_id, episode_id)
+            )
+            await db.commit()
+
     async def get_episodes_for_series(self, series_id: int) -> List[Episode]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row

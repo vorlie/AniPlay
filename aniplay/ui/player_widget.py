@@ -19,6 +19,7 @@ class PlayerWidget(QWidget):
     # Signals
     playback_started = pyqtSignal(str)
     playback_paused = pyqtSignal(float)
+    playback_resumed = pyqtSignal()
     progress_updated = pyqtSignal(float, float)
     playback_finished = pyqtSignal()
 
@@ -67,6 +68,7 @@ class PlayerWidget(QWidget):
         self.vlc_window = None
         self._current_time = 0
         self._duration = 0
+        self.is_paused = False
         
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self._poll_progress)
@@ -183,6 +185,8 @@ class PlayerWidget(QWidget):
         try:
             self.vlc_window = VlcPlayerWindow()
             self.vlc_window.progress_updated.connect(self._on_vlc_progress)
+            self.vlc_window.playback_paused.connect(self._on_pause)
+            self.vlc_window.playback_resumed.connect(self._on_resume)
             self.vlc_window.playback_finished.connect(self.playback_finished.emit)
             self.vlc_window.window_closed.connect(self.shutdown)
             
@@ -211,6 +215,14 @@ class PlayerWidget(QWidget):
         cur = self._format_time(current)
         tot = self._format_time(duration)
         self.time_label.setText(f"{cur} / {tot}")
+
+    def _on_pause(self, timestamp):
+        self.is_paused = True
+        self.playback_paused.emit(timestamp)
+
+    def _on_resume(self):
+        self.is_paused = False
+        self.playback_resumed.emit()
 
     def _connect_ipc(self):
         try:
@@ -280,6 +292,7 @@ class PlayerWidget(QWidget):
 
     def shutdown(self):
         self.poll_timer.stop()
+        self.is_paused = False
         
         if self.vlc_window:
             # Prevent recursion

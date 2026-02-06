@@ -18,6 +18,8 @@ dependencies = [
     "jinja2>=3.1.4",
     "python-vlc>=3.0.21203",
     "pyqtdarktheme",
+    "httpx>=0.28.0",
+    "python-dotenv>=1.0.1",
 ]
 
 [tool.uv.sources]

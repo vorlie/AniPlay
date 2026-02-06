@@ -6,6 +6,8 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 class VlcPlayerWindow(QMainWindow):
     # Signals for communication with PlayerWidget
     progress_updated = pyqtSignal(float, float) # current, total
+    playback_paused = pyqtSignal(float) # current time
+    playback_resumed = pyqtSignal()
     playback_finished = pyqtSignal()
     window_closed = pyqtSignal()
 
@@ -198,11 +200,16 @@ class VlcPlayerWindow(QMainWindow):
             self.player.video_set_spu(track_id)
 
     def toggle_pause(self):
-        self.player.pause()
+        # In VLC, is_playing() returns True if it's currently playing
+        # We check state BEFORE toggling to determine what to set
         if self.player.is_playing():
-            self.play_pause_btn.setText("⏸")
-        else:
+            self.player.set_pause(1)
             self.play_pause_btn.setText("▶")
+            self.playback_paused.emit(self.player.get_time() / 1000.0)
+        else:
+            self.player.set_pause(0)
+            self.play_pause_btn.setText("⏸")
+            self.playback_resumed.emit()
 
     def _on_seek_released(self):
         if not self.player.is_seekable():

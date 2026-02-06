@@ -42,7 +42,8 @@ class MainWindow(QMainWindow):
         # 1. Player Panel (Bottom-most logic, but created first to allow syncing)
         self.player_widget = PlayerWidget()
         self.player_widget.progress_updated.connect(self.on_progress_updated)
-        self.player_widget.playback_paused.connect(self.save_progress)
+        self.player_widget.playback_paused.connect(self.on_playback_paused)
+        self.player_widget.playback_resumed.connect(self.on_playback_resumed)
         self.player_widget.playback_finished.connect(self.on_playback_finished)
         
         # 2. Top Bar: Actions
@@ -183,21 +184,45 @@ class MainWindow(QMainWindow):
     async def on_episode_selected(self, episode):
         self.current_episode = episode
         
-        # Update Discord RPC
-        if self.current_series:
-            await self.discord.update_presence(
-                series=self.current_series.name,
-                episode=episode.filename,
-                player=self.player_widget.player_type
-            )
-            
         progress = await self.db.get_progress(episode.id)
         start_time = progress.timestamp if progress else 0
+
+        # Update Discord RPC
+        await self.update_discord_rpc(episode, start_time)
+            
         self.player_widget.load_video(episode.path, start_time)
+
+    async def update_discord_rpc(self, episode=None, timestamp=None):
+        if not episode:
+            episode = self.current_episode
+        if not episode or not self.current_series:
+            return
+            
+        if timestamp is None:
+            timestamp = self.player_widget._current_time
+
+        await self.discord.update_presence(
+            series=self.current_series.name,
+            episode=episode.filename,
+            player=self.player_widget.player_type,
+            thumbnail_path=self.current_series.thumbnail_path,
+            duration=episode.duration,
+            start_offset=timestamp,
+            is_paused=self.player_widget.is_paused
+        )
 
     @qasync.asyncSlot(float, float)
     async def on_progress_updated(self, current, total):
         await self.save_progress(current)
+
+    @qasync.asyncSlot(float)
+    async def on_playback_paused(self, timestamp):
+        await self.save_progress(timestamp)
+        await self.update_discord_rpc(timestamp=timestamp)
+
+    @qasync.asyncSlot()
+    async def on_playback_resumed(self):
+        await self.update_discord_rpc()
 
     @qasync.asyncSlot(float)
     async def save_progress(self, timestamp=None):
