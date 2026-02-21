@@ -5,9 +5,10 @@ import logging
 import httpx
 from pypresence import AioPresence
 from typing import Optional
-from ..config import COPYPARTY_URL, COPYPARTY_USER, COPYPARTY_PWD
+from ..config import IMAGE_HOSTER, COPYPARTY_URL, COPYPARTY_USER, COPYPARTY_PWD, IMGUR_CLIENT_ID
+from ..utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class DiscordManager:
     CLIENT_ID = "1440472840578142381"
@@ -34,13 +35,53 @@ class DiscordManager:
             self.connected = False
 
     async def _upload_thumbnail(self, thumbnail_path: str) -> Optional[str]:
-        """Upload thumbnail to Copyparty and return the public URL."""
+        """Upload thumbnail to configured hoster and return the public URL."""
         if not thumbnail_path or not os.path.exists(thumbnail_path):
             return None
             
         if thumbnail_path in self._upload_cache:
             return self._upload_cache[thumbnail_path]
 
+        if IMAGE_HOSTER == "imgur":
+            url = await self._upload_to_imgur(thumbnail_path)
+        else:
+            url = await self._upload_to_copyparty(thumbnail_path)
+        
+        if url:
+            self._upload_cache[thumbnail_path] = url
+        return url
+
+    async def _upload_to_imgur(self, thumbnail_path: str) -> Optional[str]:
+        """Upload thumbnail to Imgur."""
+        if not IMGUR_CLIENT_ID:
+            logger.error("Imgur Client ID not configured!")
+            return None
+            
+        try:
+            async with httpx.AsyncClient() as client:
+                with open(thumbnail_path, "rb") as f:
+                    content = f.read()
+                
+                headers = {"Authorization": f"Client-ID {IMGUR_CLIENT_ID}"}
+                files = {"image": content}
+                
+                response = await client.post("https://api.imgur.com/3/image", headers=headers, files=files)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    url = data.get("data", {}).get("link")
+                    if url:
+                        logger.info(f"Successfully uploaded thumbnail to Imgur: {url}")
+                        return url
+                
+                logger.error(f"Failed to upload to Imgur: {response.status_code} {response.text}")
+                return None
+        except Exception as e:
+            logger.error(f"Error during Imgur upload: {e}")
+            return None
+
+    async def _upload_to_copyparty(self, thumbnail_path: str) -> Optional[str]:
+        """Upload thumbnail to Copyparty."""
         try:
             # Generate a unique filename based on content to avoid duplicates
             with open(thumbnail_path, "rb") as f:
@@ -50,57 +91,48 @@ class DiscordManager:
                 filename = f"rpc_{file_hash}{ext}"
 
             # Prepare Copyparty upload
-            # Adding want=url to get back the confirmation
             base_url = COPYPARTY_URL.rstrip("/")
             upload_url = f"{base_url}/{filename}?want=url"
             
-            headers = {
-                "replace": "1"  # Overwrite if exists
-            }
-            
-            auth = None
-            if COPYPARTY_USER and COPYPARTY_PWD:
-                auth = (COPYPARTY_USER, COPYPARTY_PWD)
+            headers = {"replace": "1"}
+            auth = (COPYPARTY_USER, COPYPARTY_PWD) if COPYPARTY_USER and COPYPARTY_PWD else None
 
             async with httpx.AsyncClient() as client:
-                # Copyparty accepts PUT for direct file creation
                 response = await client.put(upload_url, content=content, auth=auth, headers=headers)
                 
                 if response.status_code in [200, 201]:
-                    # want=url should return the URL of the uploaded file
                     returned_url = response.text.strip()
-                    
-                    # If it's a relative URL, prepend the domain/scheme
                     if returned_url.startswith("/"):
                         from urllib.parse import urlparse
                         parsed_base = urlparse(COPYPARTY_URL)
                         final_url = f"{parsed_base.scheme}://{parsed_base.netloc}{returned_url}"
                     elif "://" not in returned_url:
-                        # Probably just the filename
                         final_url = f"{base_url}/{returned_url}"
                     else:
                         final_url = returned_url
 
-                    logger.info(f"Successfully uploaded thumbnail to {final_url}")
-                    self._upload_cache[thumbnail_path] = final_url
+                    logger.info(f"Successfully uploaded thumbnail to Copyparty: {final_url}")
                     return final_url
                 else:
-                    logger.error(f"Failed to upload thumbnail to Copyparty: {response.status_code} {response.text}")
+                    logger.error(f"Failed to upload to Copyparty: {response.status_code} {response.text}")
                     return None
         except Exception as e:
-            logger.error(f"Error during thumbnail upload: {e}")
+            logger.error(f"Error during Copyparty upload: {e}")
             return None
 
     async def update_presence(self, series: str, episode: str, player: str, 
-                              thumbnail_path: Optional[str] = None,
-                              duration: float = 0,
-                              start_offset: float = 0,
-                              is_paused: bool = False):
+                               thumbnail_path: Optional[str] = None,
+                               cached_thumbnail_url: Optional[str] = None,
+                               duration: float = 0,
+                               start_offset: float = 0,
+                               is_paused: bool = False) -> Optional[str]:
+        """Update Discord presence and return the uploaded thumbnail URL if any."""
         if not self.connected:
             await self.connect()
             if not self.connected:
-                return
+                return None
 
+        logger.debug(f"Updating Discord presence: {series} - {episode}")
         if series != self.current_series or episode != self.current_episode:
             self.current_series = series
             self.current_episode = episode
@@ -114,24 +146,26 @@ class DiscordManager:
             small_image = None
             large_text = f"Playing in {player.upper()}"
             small_text = None
+            
+            final_thumbnail_url = cached_thumbnail_url
 
             # Attempt to use thumbnail as large image
-            if thumbnail_path:
-                uploaded_url = await self._upload_thumbnail(thumbnail_path)
-                if uploaded_url:
-                    large_image = uploaded_url
-                    large_text = f"Watching: {series}"
-                    small_image = player_icon
-                    small_text = f"Playing in {player.upper()}"
+            if not final_thumbnail_url and thumbnail_path:
+                final_thumbnail_url = await self._upload_thumbnail(thumbnail_path)
             
-            # Timestamps (start=end style)
+            if final_thumbnail_url:
+                large_image = final_thumbnail_url
+                large_text = f"Watching: {series}"
+                small_image = player_icon
+                small_text = f"Playing in {player.upper()}"
+            
+            # Timestamps
             start_timestamp = None
             end_timestamp = None
             
             state_prefix = ""
             if is_paused:
                 state_prefix = "(Paused) "
-                # No timestamps when paused to "stop" the clock
             elif duration > 0:
                 now = int(time.time())
                 start_timestamp = now - int(start_offset)
@@ -149,9 +183,11 @@ class DiscordManager:
                 small_image=small_image,
                 small_text=small_text
             )
+            return final_thumbnail_url
         except Exception as e:
             logger.error(f"Error updating Discord presence: {e}")
             self.connected = False
+            return None
 
     async def clear(self):
         if self.connected and self.rpc:

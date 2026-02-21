@@ -4,7 +4,9 @@ import subprocess
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
+from ..utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 @dataclass
 class TrackInfo:

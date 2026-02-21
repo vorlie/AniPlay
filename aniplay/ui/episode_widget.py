@@ -1,6 +1,7 @@
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QListWidget, QListWidgetItem, QLabel, QHBoxLayout, QProgressBar, QFrame, QPushButton, QMenu, QTabWidget
 from PyQt6.QtCore import pyqtSignal, Qt, QSize
 from ..database.models import Episode, WatchProgress
+from ..utils.format_utils import format_size, format_time
 
 class EpisodeItem(QFrame):
     play_clicked = pyqtSignal(Episode)
@@ -38,19 +39,27 @@ class EpisodeItem(QFrame):
         
         season_str = f"S{episode.season_number:02d}" if episode.season_number is not None else ""
         ep_str = f"E{episode.episode_number:02d}" if episode.episode_number is not None else ""
-        title = f"{season_str}{ep_str} - {episode.filename}".strip(" - ")
+        
+        display_name = episode.title if episode.title else episode.filename
+        title = f"{season_str}{ep_str} - {display_name}".strip(" - ")
         
         self.title_label = QLabel(title)
         self.title_label.setWordWrap(False)
         self.title_label.setStyleSheet(f"""
             font-weight: bold; 
-            font-size: 14px;
+            font-size: 11pt;
             background: transparent;
             {'color: #00c853;' if is_completed else ''}
         """)
+        # Set font explicitly to avoid -1 point size warning during metric calculation
+        font = self.title_label.font()
+        font.setPointSize(11)
+        font.setBold(True)
+        self.title_label.setFont(font)
+
         # Use Qt eliding to truncate long text with ellipsis
         from PyQt6.QtGui import QFontMetrics
-        font_metrics = self.title_label.fontMetrics()
+        font_metrics = QFontMetrics(font)
         # Allow reasonable width but prevent excessive text
         max_width = 600  # Will be constrained by container anyway
         elided_text = font_metrics.elidedText(title, Qt.TextElideMode.ElideRight, max_width)
@@ -63,9 +72,19 @@ class EpisodeItem(QFrame):
         self.meta_label = QLabel()
         if episode.duration > 0:
             duration_str = self._format_time(episode.duration)
-            self.meta_label.setText(duration_str)
+            size_str = format_size(episode.size_bytes)
+            self.meta_label.setText(f"{duration_str} • {size_str}" if episode.size_bytes > 0 else duration_str)
             self.meta_label.setStyleSheet("""
-                font-size: 12px; 
+                font-size: 9pt; 
+                color: rgba(255, 255, 255, 0.6); 
+                background: transparent;
+                margin-top: 2px;
+            """)
+            self.info_layout.addWidget(self.meta_label)
+        elif episode.size_bytes > 0:
+            self.meta_label.setText(format_size(episode.size_bytes))
+            self.meta_label.setStyleSheet("""
+                font-size: 9pt; 
                 color: rgba(255, 255, 255, 0.6); 
                 background: transparent;
                 margin-top: 2px;
@@ -123,13 +142,7 @@ class EpisodeItem(QFrame):
         self.main_layout.addWidget(self.play_btn)
 
     def _format_time(self, seconds: float) -> str:
-        s = int(seconds)
-        hours = s // 3600
-        minutes = (s % 3600) // 60
-        seconds = s % 60
-        if hours > 0:
-            return f"{hours}:{minutes:02d}:{seconds:02d}"
-        return f"{minutes:02d}:{seconds:02d}"
+        return format_time(seconds)
 
 class EpisodeWidget(QWidget):
     episode_selected = pyqtSignal(Episode)

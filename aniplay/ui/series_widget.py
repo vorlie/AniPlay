@@ -1,8 +1,10 @@
 import os
+import qasync
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QListWidget, QListWidgetItem, QLabel, QHBoxLayout, QFrame, QLineEdit, QMenu
 from PyQt6.QtCore import pyqtSignal, Qt, QSize
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QPainterPath, QColor, QBrush
 from ..database.models import Series
+from .selection_info_widget import SelectionInfoWidget
 
 class SeriesCard(QFrame):
     def __init__(self, series: Series, parent=None):
@@ -124,6 +126,9 @@ class SeriesWidget(QWidget):
         """)
         self.search_bar.textChanged.connect(self._filter_series)
         self.layout.addWidget(self.search_bar)
+
+        self.selection_info = SelectionInfoWidget()
+        self.layout.addWidget(self.selection_info)
         
         self.list_widget = QListWidget()
         self.list_widget.setViewMode(QListWidget.ViewMode.IconMode)
@@ -162,10 +167,23 @@ class SeriesWidget(QWidget):
             self.list_widget.setItemWidget(item, card)
             self.series_map[s.id] = s
 
-    def _on_item_clicked(self, item):
+    @qasync.asyncSlot(QListWidgetItem)
+    async def _on_item_clicked(self, item):
         series_id = item.data(Qt.ItemDataRole.UserRole)
         if series_id in self.series_map:
-            self.series_selected.emit(self.series_map[series_id])
+            series = self.series_map[series_id]
+            self.series_selected.emit(series)
+            
+            # Update selection info (we might need episode count from parent/db)
+            # For now, we'll emit the signal and let MainWindow handle it or 
+            # we can try to get more info if series object has it.
+            # actually, let's let MainWindow handle updating this widget since it has DB access
+            # or we can pass a callback/method.
+            # For now, just show name and size from series object
+            self.selection_info.update_info(series.name, 0, series.size_bytes)
+            # MainWindow will update episode count later via a separate call if needed
+            # but wait, MainWindow is the one that receives the signal.
+            # Let's just update as much as we can here.
 
     def _filter_series(self, text):
         search_text = text.lower()

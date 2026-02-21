@@ -3,6 +3,9 @@ import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from ..config import VIDEO_EXTENSIONS
+from ..utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 class FileScanner:
     # Regex patterns for episode parsing
@@ -70,6 +73,7 @@ class FileScanner:
         - Series/Episode.mkv
         - Series/Season 1/Episode.mkv
         """
+        logger.info(f"Scanning series folder: {series_path}")
         episodes = []
         base_path = Path(series_path)
         
@@ -98,4 +102,5 @@ class FileScanner:
                 "folder_name": folder_name
             })
             
+        logger.debug(f"Scan complete. Found {len(episodes)} episodes.")
         return episodes

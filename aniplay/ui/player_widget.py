@@ -15,6 +15,9 @@ try:
 except ImportError:
     vlc = None
 
+from ..utils.logger import get_logger
+logger = get_logger(__name__)
+
 class PlayerWidget(QWidget):
     # Signals
     playback_started = pyqtSignal(str)
@@ -75,6 +78,7 @@ class PlayerWidget(QWidget):
         self.poll_timer.setInterval(1000)
 
     def load_video(self, path: str, start_time: float = 0):
+        logger.info(f"Loading video: {path} (Start time: {start_time})")
         self.shutdown() 
         
         if self.player_type == "mpv":
@@ -118,6 +122,7 @@ class PlayerWidget(QWidget):
 
     def _load_mpv(self, path, start_time):
         exe = self._find_executable("mpv")
+        logger.debug(f"Using mpv executable: {exe}")
         
         # IPC socket path (randomish name)
         self.ipc_path = f"\\\\.\\pipe\\aniplay_mpv_{int(time.time())}"
@@ -149,6 +154,7 @@ class PlayerWidget(QWidget):
 
     def _load_vlc(self, path, start_time):
         exe = self._find_executable("vlc")
+        logger.debug(f"Using vlc executable: {exe}")
         
         # VLC start time is in seconds
         self.vlc_password = "aniplay"
@@ -205,6 +211,7 @@ class PlayerWidget(QWidget):
             self.playback_started.emit(os.path.basename(path))
             
         except Exception as e:
+            logger.error(f"Failed to load embedded VLC: {e}", exc_info=True)
             self.info_label.setText(f"VLC Error: {e}")
 
     def _on_vlc_progress(self, current, duration):
@@ -217,10 +224,12 @@ class PlayerWidget(QWidget):
         self.time_label.setText(f"{cur} / {tot}")
 
     def _on_pause(self, timestamp):
+        logger.info(f"Playback paused at {timestamp}")
         self.is_paused = True
         self.playback_paused.emit(timestamp)
 
     def _on_resume(self):
+        logger.info("Playback resumed")
         self.is_paused = False
         self.playback_resumed.emit()
 
@@ -291,6 +300,7 @@ class PlayerWidget(QWidget):
             pass
 
     def shutdown(self):
+        logger.debug("Shutting down player")
         self.poll_timer.stop()
         self.is_paused = False
         

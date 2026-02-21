@@ -17,3 +17,5 @@ mountdrive.bat
 cache/
 logs/
 *.env*
+*.txt*
+*.log

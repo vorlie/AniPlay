@@ -8,6 +8,8 @@ class Series:
     path: str
     id: Optional[int] = None
     thumbnail_path: Optional[str] = None
+    rpc_image_url: Optional[str] = None
+    size_bytes: int = 0
     date_added: datetime = field(default_factory=datetime.now)
 
 @dataclass
@@ -27,7 +29,9 @@ class Episode:
     filename: str
     path: str
     id: Optional[int] = None
+    title: Optional[str] = None
     duration: float = 0.0
+    size_bytes: int = 0
     date_added: datetime = field(default_factory=datetime.now)
     episode_number: Optional[int] = None
     season_number: Optional[int] = None

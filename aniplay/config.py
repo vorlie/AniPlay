@@ -21,6 +21,8 @@ VIDEO_EXTENSIONS = {
 # Playback Settings
 AUTO_SAVE_INTERVAL = 5  # seconds
 COMPLETE_THRESHOLD = 0.9  # 90% watched marks as completed
+PREFERRED_AUDIO = os.getenv("PREFERRED_AUDIO", "jpn")
+PREFERRED_SUBTITLE = os.getenv("PREFERRED_SUBTITLE", "pol")
 
 # UI Settings
 PREFERRED_PLAYER = "embedded_vlc"  # "mpv", "vlc", or "embedded_vlc"
@@ -28,6 +30,8 @@ THUMBNAIL_CACHE_DIR = BASE_DIR / "cache" / "thumbnails"
 os.makedirs(THUMBNAIL_CACHE_DIR, exist_ok=True)
 
 # Discord Rich Presence Settings
+IMAGE_HOSTER = os.getenv("IMAGE_HOSTER", "copyparty") # "copyparty" or "imgur"
 COPYPARTY_URL = os.getenv("COPYPARTY_URL", "URLHERE")
 COPYPARTY_USER = os.getenv("COPYPARTY_USER", "USERNAMEHERE")
 COPYPARTY_PWD = os.getenv("COPYPARTY_PWD", "PASSWORDHERE")
+IMGUR_CLIENT_ID = os.getenv("IMGUR_CLIENT_ID", "")

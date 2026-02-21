@@ -4,12 +4,17 @@ from typing import List, Optional, Any  # noqa: F401
 from datetime import datetime
 from .models import Series, Episode, WatchProgress, MediaTrack
 from ..config import DB_PATH
+from ..utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 class DatabaseManager:
     def __init__(self, db_path: str = str(DB_PATH)):
         self.db_path = db_path
+        logger.debug(f"DatabaseManager initialized with path: {self.db_path}")
 
     async def initialize(self):
+        logger.info("Initializing database...")
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("PRAGMA foreign_keys = ON")
             
@@ -20,6 +25,8 @@ class DatabaseManager:
                     name TEXT NOT NULL,
                     path TEXT NOT NULL UNIQUE,
                     thumbnail_path TEXT,
+                    rpc_image_url TEXT,
+                    size_bytes INTEGER DEFAULT 0,
                     date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -31,7 +38,9 @@ class DatabaseManager:
                     series_id INTEGER NOT NULL,
                     filename TEXT NOT NULL,
                     path TEXT NOT NULL UNIQUE,
+                    title TEXT,
                     duration REAL DEFAULT 0,
+                    size_bytes INTEGER DEFAULT 0,
                     episode_number INTEGER,
                     season_number INTEGER,
                     folder_name TEXT,
@@ -67,41 +76,59 @@ class DatabaseManager:
             """)
             
             # Migrations
-            # Check for folder_name column in episodes
             async with db.execute("PRAGMA table_info(episodes)") as cursor:
                 columns = [row[1] for row in await cursor.fetchall()]
                 if 'folder_name' not in columns:
                     await db.execute("ALTER TABLE episodes ADD COLUMN folder_name TEXT")
+                if 'title' not in columns:
+                    await db.execute("ALTER TABLE episodes ADD COLUMN title TEXT")
+                if 'size_bytes' not in columns:
+                    await db.execute("ALTER TABLE episodes ADD COLUMN size_bytes INTEGER DEFAULT 0")
+            
+            async with db.execute("PRAGMA table_info(series)") as cursor:
+                columns = [row[1] for row in await cursor.fetchall()]
+                if 'rpc_image_url' not in columns:
+                    await db.execute("ALTER TABLE series ADD COLUMN rpc_image_url TEXT")
+                if 'size_bytes' not in columns:
+                    await db.execute("ALTER TABLE series ADD COLUMN size_bytes INTEGER DEFAULT 0")
             
             await db.commit()
 
     # Series Operations
     
     async def add_series(self, series: Series) -> int:
+        logger.debug(f"Adding series: {series.name} (path: {series.path})")
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "INSERT OR IGNORE INTO series (name, path, thumbnail_path) VALUES (?, ?, ?)",
-                (series.name, series.path, series.thumbnail_path)
+                "INSERT OR IGNORE INTO series (name, path, thumbnail_path, rpc_image_url, size_bytes) VALUES (?, ?, ?, ?, ?)",
+                (series.name, series.path, series.thumbnail_path, series.rpc_image_url, series.size_bytes)
             )
             await db.commit()
             if cursor.lastrowid:
                 series.id = cursor.lastrowid
+                logger.info(f"New series added: {series.name} (ID: {series.id})")
                 return cursor.lastrowid
             
             # If ignore triggered, find the existing id
             async with db.execute("SELECT id FROM series WHERE path = ?", (series.path,)) as cursor:
                 row = await cursor.fetchone()
-                return row[0] if row else -1
+                series_id = row[0] if row else -1
+                logger.debug(f"Series already exists: {series.name} (ID: {series_id})")
+                return series_id
+
     async def get_all_series(self) -> List[Series]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute("SELECT * FROM series ORDER BY name") as cursor:
                 rows = await cursor.fetchall()
+                logger.debug(f"Fetched {len(rows)} series from database")
                 return [Series(
                     id=row['id'],
                     name=row['name'],
                     path=row['path'],
                     thumbnail_path=row['thumbnail_path'],
+                    rpc_image_url=row['rpc_image_url'],
+                    size_bytes=row['size_bytes'],
                     date_added=datetime.fromisoformat(row['date_added']) if isinstance(row['date_added'], str) else row['date_added']
                 ) for row in rows]
 
@@ -116,11 +143,14 @@ class DatabaseManager:
                         name=row['name'],
                         path=row['path'],
                         thumbnail_path=row['thumbnail_path'],
+                        rpc_image_url=row['rpc_image_url'],
+                        size_bytes=row['size_bytes'],
                         date_added=datetime.fromisoformat(row['date_added']) if isinstance(row['date_added'], str) else row['date_added']
                     )
                 return None
 
     async def update_series_poster(self, series_id: int, poster_path: str):
+        logger.info(f"Updating poster for series {series_id} to: {poster_path}")
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "UPDATE series SET thumbnail_path = ? WHERE id = ?",
@@ -128,25 +158,46 @@ class DatabaseManager:
             )
             await db.commit()
 
+    async def update_series_rpc_url(self, series_id: int, rpc_url: str):
+        logger.info(f"Updating RPC image URL for series {series_id} to: {rpc_url}")
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE series SET rpc_image_url = ? WHERE id = ?",
+                (rpc_url, series_id)
+            )
+            await db.commit()
+
+    async def update_series_size(self, series_id: int, size_bytes: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE series SET size_bytes = ? WHERE id = ?",
+                (size_bytes, series_id)
+            )
+            await db.commit()
+
     # Episode Operations
 
     async def add_episode(self, episode: Episode) -> int:
+        logger.debug(f"Adding episode: {episode.filename} to series {episode.series_id}")
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """INSERT OR IGNORE INTO episodes 
-                   (series_id, filename, path, duration, episode_number, season_number, folder_name) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (episode.series_id, episode.filename, episode.path, episode.duration, 
-                 episode.episode_number, episode.season_number, episode.folder_name)
+                   (series_id, filename, path, title, duration, size_bytes, episode_number, season_number, folder_name) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (episode.series_id, episode.filename, episode.path, episode.title, episode.duration, 
+                 episode.size_bytes, episode.episode_number, episode.season_number, episode.folder_name)
             )
             await db.commit()
             if cursor.lastrowid:
                 episode.id = cursor.lastrowid
+                logger.info(f"New episode added: {episode.filename} (ID: {episode.id})")
                 return cursor.lastrowid
             
             async with db.execute("SELECT id FROM episodes WHERE path = ?", (episode.path,)) as cursor:
                 row = await cursor.fetchone()
-                return row[0] if row else -1
+                ep_id = row[0] if row else -1
+                logger.debug(f"Episode already exists: {episode.filename} (ID: {ep_id})")
+                return ep_id
 
     async def update_episode_metadata(self, episode: Episode):
         async with aiosqlite.connect(self.db_path) as db:
@@ -154,9 +205,10 @@ class DatabaseManager:
                 """UPDATE episodes SET 
                    episode_number = ?, 
                    season_number = ?, 
-                   folder_name = ? 
+                   folder_name = ?,
+                   title = ?
                    WHERE path = ?""",
-                (episode.episode_number, episode.season_number, episode.folder_name, episode.path)
+                (episode.episode_number, episode.season_number, episode.folder_name, episode.title, episode.path)
             )
             await db.commit()
 
@@ -183,7 +235,9 @@ class DatabaseManager:
                     series_id=row['series_id'],
                     filename=row['filename'],
                     path=row['path'],
+                    title=row['title'],
                     duration=row['duration'],
+                    size_bytes=row['size_bytes'],
                     episode_number=row['episode_number'],
                     season_number=row['season_number'],
                     folder_name=row['folder_name']
@@ -207,7 +261,9 @@ class DatabaseManager:
                     series_id=row['series_id'],
                     filename=row['filename'],
                     path=row['path'],
+                    title=row['title'],
                     duration=row['duration'],
+                    size_bytes=row['size_bytes'],
                     episode_number=row['episode_number'],
                     season_number=row['season_number'],
                     folder_name=row['folder_name']
@@ -224,7 +280,9 @@ class DatabaseManager:
                         series_id=row['series_id'],
                         filename=row['filename'],
                         path=row['path'],
+                        title=row['title'],
                         duration=row['duration'],
+                        size_bytes=row['size_bytes'],
                         episode_number=row['episode_number'],
                         season_number=row['season_number'],
                         folder_name=row['folder_name']
@@ -269,6 +327,11 @@ class DatabaseManager:
             await db.execute("UPDATE episodes SET duration = ? WHERE id = ?", (duration, episode_id))
             await db.commit()
 
+    async def update_episode_size(self, episode_id: int, size_bytes: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE episodes SET size_bytes = ? WHERE id = ?", (size_bytes, episode_id))
+            await db.commit()
+
     # Progress Operations
 
     async def update_progress(self, progress: WatchProgress):
@@ -298,6 +361,19 @@ class DatabaseManager:
                         completed=bool(row['completed'])
                     )
                 return None
+
+    async def get_all_progress(self) -> List[WatchProgress]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM watch_progress ORDER BY last_watched DESC") as cursor:
+                rows = await cursor.fetchall()
+                return [WatchProgress(
+                    id=row['id'],
+                    episode_id=row['episode_id'],
+                    timestamp=row['timestamp'],
+                    last_watched=datetime.fromisoformat(row['last_watched']) if isinstance(row['last_watched'], str) else row['last_watched'],
+                    completed=bool(row['completed'])
+                ) for row in rows]
 
     async def mark_episode_watched(self, episode_id: int, watched: bool):
         async with aiosqlite.connect(self.db_path) as db:

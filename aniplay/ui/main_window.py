@@ -1,7 +1,7 @@
 import sys
 import ctypes
 import os
-from PyQt6.QtWidgets import QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog, QMessageBox, QComboBox, QApplication
+from PyQt6.QtWidgets import QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog, QMessageBox, QComboBox, QApplication, QMenu, QCheckBox
 from PyQt6.QtCore import Qt
 import qasync
 import asyncio
@@ -12,15 +12,19 @@ from .player_widget import PlayerWidget
 from ..database.db import DatabaseManager
 from ..database.models import Series, Episode, WatchProgress
 from ..core.library_manager import LibraryManager
-from ..core.library_manager import LibraryManager
 from ..core.discord_manager import DiscordManager
+from .metadata_manager import MetadataManager
 from ..config import DEFAULT_LIBRARY_PATH, PREFERRED_PLAYER
+from ..utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 class MainWindow(QMainWindow):
     def __init__(self, db_manager: DatabaseManager):
         super().__init__()
         self.setWindowTitle("AniPlay")
         self.resize(1280, 850)
+        self.showMaximized()
         # Theme will be handled by qdarktheme
         self.setStyleSheet("")
 
@@ -31,6 +35,7 @@ class MainWindow(QMainWindow):
         self.current_series = None
 
         self.setup_ui()
+        logger.info("MainWindow initialized")
 
     def setup_ui(self):
         self.central_widget = QWidget()
@@ -49,20 +54,26 @@ class MainWindow(QMainWindow):
         # 2. Top Bar: Actions
         self.top_bar = QHBoxLayout()
         
-        self.scan_btn = QPushButton("🔄 Scan Library")
+        # Scan Button with Menu
+        self.scan_btn = QPushButton("🔄 Quick Sync")
         self.scan_btn.setFixedHeight(40)
         self.scan_btn.setStyleSheet("""
             QPushButton {
                 font-weight: bold;
-                font-size: 13px;
+                font-size: 10pt;
                 padding: 0 20px;
                 border-radius: 8px;
+                background-color: #2196f3;
+                color: white;
             }
-            QPushButton:hover {
-                background-color: rgba(255, 255, 255, 0.1);
-            }
+            QPushButton::menu-indicator { image: none; }
         """)
-        self.scan_btn.clicked.connect(self.scan_library)
+        
+        scan_menu = QMenu(self)
+        scan_menu.addAction("Quick Sync (Incremental)", lambda: self.run_scan(full_scan=False))
+        scan_menu.addAction("Full Re-scan (Overwrite Titles)", lambda: self.run_scan(full_scan=True))
+        self.scan_btn.setMenu(scan_menu)
+        self.scan_btn.clicked.connect(lambda: self.run_scan(full_scan=False))
         
         self.mount_btn = QPushButton("🔒 Mount Drive")
         self.mount_btn.setFixedHeight(40)
@@ -70,7 +81,7 @@ class MainWindow(QMainWindow):
             QPushButton {
                 color: #f44336;
                 font-weight: bold;
-                font-size: 13px;
+                font-size: 10pt;
                 padding: 0 20px;
                 border-radius: 8px;
             }
@@ -90,12 +101,44 @@ class MainWindow(QMainWindow):
             QComboBox {
                 padding: 8px 15px;
                 border-radius: 8px;
-                font-size: 13px;
+                font-size: 10pt;
             }
         """)
         
         self.top_bar.addWidget(self.scan_btn)
         self.top_bar.addSpacing(10)
+        
+        self.meta_btn = QPushButton("📝 Metadata")
+        self.meta_btn.setFixedHeight(40)
+        self.meta_btn.setStyleSheet("""
+            QPushButton {
+                font-weight: bold;
+                font-size: 10pt;
+                padding: 0 20px;
+                border-radius: 8px;
+            }
+        """)
+        self.meta_btn.clicked.connect(self.open_metadata_manager)
+        self.top_bar.addWidget(self.meta_btn)
+        self.top_bar.addSpacing(15)
+
+        # NSFW Toggle
+        self.nsfw_toggle = QCheckBox("Watching NSFW? Hide")
+        self.nsfw_toggle.setStyleSheet("""
+            QCheckBox {
+                color: rgba(255, 255, 255, 0.7);
+                font-size: 10pt;
+                spacing: 8px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+            }
+        """)
+        self.nsfw_toggle.stateChanged.connect(lambda: asyncio.create_task(self.update_discord_rpc()))
+        self.top_bar.addWidget(self.nsfw_toggle)
+        self.top_bar.addSpacing(10)
+
         self.top_bar.addWidget(self.mount_btn)
         self.top_bar.addSpacing(10)
         self.top_bar.addWidget(self.player_selector)
@@ -125,25 +168,47 @@ class MainWindow(QMainWindow):
 
         # Final Sync (everything now exists)
         self.on_player_changed(PREFERRED_PLAYER)
+        logger.debug("UI setup complete")
 
     async def load_initial_data(self):
+        logger.info("Loading initial data...")
         series = await self.library.get_all_series()
         self.series_widget.set_series(series)
 
     @qasync.asyncSlot()
+    async def run_scan(self, full_scan=False):
+        try:
+            self.scan_btn.setEnabled(False)
+            logger.info(f"Starting library sync (full_scan={full_scan})")
+            await self.library.scan_library(full_scan=full_scan)
+            
+            # Refresh library view
+            logger.debug("Refreshing series list after scan")
+            series_list = await self.library.get_all_series()
+            self.series_widget.set_series(series_list)
+            
+            self.scan_btn.setEnabled(True)
+            self.scan_btn.setText("🔄 Quick Sync")
+            QMessageBox.information(self, "Scan Complete", "Library sync finished!")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Library scan failed: {e}")
+            self.scan_btn.setEnabled(True)
+            self.scan_btn.setText("🔄 Quick Sync")
+
+    @qasync.asyncSlot()
     async def scan_library(self, checked=False):
-        self.scan_btn.setEnabled(False)
-        self.scan_btn.setText("Scanning...")
-        await self.library.scan_library()
-        series = await self.library.get_all_series()
-        self.series_widget.set_series(series)
-        self.scan_btn.setEnabled(True)
-        self.scan_btn.setText("Scan Library")
+        # Compatibility/Legacy
+        await self.run_scan(full_scan=False)
 
     @qasync.asyncSlot(object)
     async def on_series_selected(self, series):
+        logger.info(f"Series selected: {series.name}")
         self.current_series = series
         episodes = await self.library.get_episodes(series.id)
+        
+        # Update selection info with correct episode count
+        self.series_widget.selection_info.update_info(series.name, len(episodes), series.size_bytes)
         
         # Fetch progress for all episodes in this series
         progress_map = {}
@@ -182,6 +247,7 @@ class MainWindow(QMainWindow):
 
     @qasync.asyncSlot(object)
     async def on_episode_selected(self, episode):
+        logger.info(f"Episode selected: {episode.filename}")
         self.current_episode = episode
         
         progress = await self.db.get_progress(episode.id)
@@ -201,15 +267,32 @@ class MainWindow(QMainWindow):
         if timestamp is None:
             timestamp = self.player_widget._current_time
 
-        await self.discord.update_presence(
-            series=self.current_series.name,
-            episode=episode.filename,
+        display_name = episode.title if episode.title else episode.filename
+        
+        # Privacy/NSFW logic
+        is_safe_mode = self.nsfw_toggle.isChecked()
+        series_name = self.current_series.name if not is_safe_mode else "Secret Series"
+        episode_display = display_name if not is_safe_mode else "Classified Episode"
+        thumb_path = self.current_series.thumbnail_path if not is_safe_mode else None
+        cached_url = self.current_series.rpc_image_url if not is_safe_mode else None
+
+        # Use cached URL if available
+        rpc_url = await self.discord.update_presence(
+            series=series_name,
+            episode=episode_display,
             player=self.player_widget.player_type,
-            thumbnail_path=self.current_series.thumbnail_path,
+            thumbnail_path=thumb_path,
+            cached_thumbnail_url=cached_url,
             duration=episode.duration,
             start_offset=timestamp,
             is_paused=self.player_widget.is_paused
         )
+        
+        # If we got a new URL (upload happened), save it to DB (only if not in safe mode)
+        if not is_safe_mode and rpc_url and rpc_url != self.current_series.rpc_image_url:
+            logger.info(f"Caching new RPC image URL for series: {self.current_series.name}")
+            self.current_series.rpc_image_url = rpc_url
+            await self.db.update_series_rpc_url(self.current_series.id, rpc_url)
 
     @qasync.asyncSlot(float, float)
     async def on_progress_updated(self, current, total):
@@ -248,6 +331,32 @@ class MainWindow(QMainWindow):
     async def on_playback_finished(self):
         if self.current_episode:
             await self.save_progress(timestamp=self.player_widget._duration)
+            
+        # 2. Try to play the next one automatically
+        await self.play_next_episode()
+
+    async def play_next_episode(self):
+        if not self.current_series:
+            return
+
+        # Get the list of episodes
+        episodes = await self.library.get_episodes(self.current_series.id)
+        
+        # Find the index of the current episode
+        current_idx = -1
+        for i, ep in enumerate(episodes):
+            if ep.id == self.current_episode.id:
+                current_idx = i
+                break
+                
+        # If there's a next one, select it
+        if current_idx != -1 and current_idx + 1 < len(episodes):
+            next_ep = episodes[current_idx + 1]
+            logger.info(f"Auto-advancing to: {next_ep.filename}")
+            await self.on_episode_selected(next_ep)
+        else:
+            logger.info("End of series reached.")
+            # self.player_widget.shutdown()
 
     def on_player_changed(self, player_type):
         self.player_widget.player_type = player_type
@@ -269,6 +378,10 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Mounting", "Executing mount script as Administrator...")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to execute mount script: {e}")
+
+    def open_metadata_manager(self):
+        self.meta_window = MetadataManager(self.db, self)
+        self.meta_window.show()
 
     def closeEvent(self, event):
         self.player_widget.shutdown()

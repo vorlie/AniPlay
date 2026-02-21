@@ -4,14 +4,12 @@ from PyQt6.QtWidgets import QApplication
 import qdarktheme
 from qasync import QEventLoop
 import logging
+from aniplay.utils.logger import setup_logging
 from aniplay.ui.main_window import MainWindow
 from aniplay.database.db import DatabaseManager
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Initialize logging
+setup_logging(level=logging.DEBUG) # Using DEBUG for now to see more info
 logger = logging.getLogger("AniPlay")
 
 def main():
