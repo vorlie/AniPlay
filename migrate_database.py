@@ -45,7 +45,7 @@ async def main():
         print("No moved episodes detected.")
         
     print("\n" + "=" * 60)
-    print(f"Migration Summary:")
+    print("Migration Summary:")
     print(f"  Episodes Updated:    {len(results['updated'])}")
     print(f"  Episodes Unchanged:  {results['not_moved']}")
     print(f"  Files Not Found:     {len(results['missing_in_physical'])}")

@@ -123,6 +123,7 @@ class DiscordManager:
     async def update_presence(self, series: str, episode: str, player: str, 
                                thumbnail_path: Optional[str] = None,
                                cached_thumbnail_url: Optional[str] = None,
+                               large_image_url: Optional[str] = None,
                                duration: float = 0,
                                start_offset: float = 0,
                                is_paused: bool = False) -> Optional[str]:
@@ -147,7 +148,7 @@ class DiscordManager:
             large_text = f"Playing in {player.upper()}"
             small_text = None
             
-            final_thumbnail_url = cached_thumbnail_url
+            final_thumbnail_url = cached_thumbnail_url or large_image_url
 
             # Attempt to use thumbnail as large image
             if not final_thumbnail_url and thumbnail_path:
@@ -171,7 +172,9 @@ class DiscordManager:
                 start_timestamp = now - int(start_offset)
                 end_timestamp = now + int(duration - start_offset)
             else:
-                start_timestamp = self.start_time
+                # For online streams without duration, use start_time for elapsed
+                # Correctly subtract offset from the anchor start_time
+                start_timestamp = self.start_time - int(start_offset or 0)
 
             await self.rpc.update(
                 state=f"{state_prefix}Watching: {episode}",

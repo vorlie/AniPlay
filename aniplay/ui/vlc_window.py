@@ -282,8 +282,16 @@ class VlcPlayerWindow(QMainWindow):
         icon = "⏩" if ms > 0 else "⏪"
         self.show_osd(f"{icon} {abs(ms)//1000}s")
 
-    def play_path(self, path, start_time=0):
+    def play_path(self, path, start_time=0, referrer=None, subtitle=None):
         media = self.instance.media_new(path)
+        if referrer:
+            # VLC uses :http-referrer for media options
+            media.add_option(f"http-referrer={referrer}")
+        
+        if subtitle:
+            # For network subtitles, we can sometimes use :sub-file
+            media.add_option(f"sub-file={subtitle}")
+            
         self.player.set_media(media)
         self.player.play()
         

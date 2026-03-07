@@ -45,3 +45,15 @@ class WatchProgress:
     last_watched: datetime = field(default_factory=datetime.now)
     completed: bool = False
     id: Optional[int] = None
+
+@dataclass
+class OnlineProgress:
+    show_id: str
+    show_name: str
+    episode_number: int
+    timestamp: float = 0.0
+    thumbnail_url: Optional[str] = None
+    local_path: Optional[str] = None
+    completed: bool = False
+    last_watched: datetime = field(default_factory=datetime.now)
+    id: Optional[int] = None

@@ -4,6 +4,18 @@ from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+# === .env example ===
+# DEFAULT_LIBRARY_PATH=
+# IMAGE_HOSTER=imgur
+# === Copyparty credentials for Discord RPC thumbnails
+# COPYPARTY_URL=
+# COPYPARTY_USER=
+# COPYPARTY_PWD=
+# IMGUR_CLIENT_ID=
+# === Media Preferences (comma-separated codes like jpn,eng,pol)
+# PREFERRED_AUDIO=jpn
+# PREFERRED_SUBTITLE=eng
+
 
 # Base Paths
 BASE_DIR = Path(__file__).parent.parent
@@ -27,7 +39,9 @@ PREFERRED_SUBTITLE = os.getenv("PREFERRED_SUBTITLE", "pol")
 # UI Settings
 PREFERRED_PLAYER = "embedded_vlc"  # "mpv", "vlc", or "embedded_vlc"
 THUMBNAIL_CACHE_DIR = BASE_DIR / "cache" / "thumbnails"
+DOWNLOADS_PATH = BASE_DIR / "downloads"
 os.makedirs(THUMBNAIL_CACHE_DIR, exist_ok=True)
+os.makedirs(DOWNLOADS_PATH, exist_ok=True)
 
 # Discord Rich Presence Settings
 IMAGE_HOSTER = os.getenv("IMAGE_HOSTER", "copyparty") # "copyparty" or "imgur"

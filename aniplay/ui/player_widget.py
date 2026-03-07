@@ -77,16 +77,16 @@ class PlayerWidget(QWidget):
         self.poll_timer.timeout.connect(self._poll_progress)
         self.poll_timer.setInterval(1000)
 
-    def load_video(self, path: str, start_time: float = 0):
-        logger.info(f"Loading video: {path} (Start time: {start_time})")
+    def load_video(self, path: str, start_time: float = 0, referrer: str = None, subtitle: str = None):
+        logger.info(f"Loading video: {path} (Start time: {start_time}, Referrer: {referrer}, Subtitle: {subtitle})")
         self.shutdown() 
         
         if self.player_type == "mpv":
-            self._load_mpv(path, start_time)
+            self._load_mpv(path, start_time, referrer, subtitle)
         elif self.player_type == "vlc":
-            self._load_vlc(path, start_time)
+            self._load_vlc(path, start_time, referrer, subtitle)
         elif self.player_type == "embedded_vlc":
-            self._load_embedded_vlc(path, start_time)
+            self._load_embedded_vlc(path, start_time, referrer, subtitle)
 
     def _find_executable(self, name: str) -> str:
         """Find executable in PATH or common Windows locations."""
@@ -120,7 +120,7 @@ class PlayerWidget(QWidget):
                 
         return name # Return original name and hope for the best
 
-    def _load_mpv(self, path, start_time):
+    def _load_mpv(self, path, start_time, referrer=None, subtitle=None):
         exe = self._find_executable("mpv")
         logger.debug(f"Using mpv executable: {exe}")
         
@@ -135,6 +135,12 @@ class PlayerWidget(QWidget):
             "--force-window=yes",
             "--title=AniPlay - Playing"
         ]
+        
+        if referrer:
+            cmd.append(f"--referrer={referrer}")
+        if subtitle:
+            # External mpv can take network subtitles directly
+            cmd.append(f"--sub-file={subtitle}")
         
         try:
             self.external_process = subprocess.Popen(cmd)
@@ -152,7 +158,7 @@ class PlayerWidget(QWidget):
         except FileNotFoundError:
             self.info_label.setText(f"Error: '{exe}' not found.")
 
-    def _load_vlc(self, path, start_time):
+    def _load_vlc(self, path, start_time, referrer=None):
         exe = self._find_executable("vlc")
         logger.debug(f"Using vlc executable: {exe}")
         
@@ -164,8 +170,14 @@ class PlayerWidget(QWidget):
             "--extraintf", "http",
             "--http-password", self.vlc_password,
             "--start-time", str(int(start_time)),
-            path
         ]
+        
+        if referrer:
+            cmd.append(f"--http-referrer={referrer}")
+        if subtitle: # type: ignore  # noqa: F821
+            cmd.append(f"--sub-file={subtitle}")  # type: ignore # noqa: F821
+            
+        cmd.append(path)
         
         try:
             self.external_process = subprocess.Popen(cmd)
@@ -183,7 +195,7 @@ class PlayerWidget(QWidget):
         except FileNotFoundError:
             self.info_label.setText(f"Error: '{exe}' not found.")
 
-    def _load_embedded_vlc(self, path, start_time):
+    def _load_embedded_vlc(self, path, start_time, referrer=None, subtitle=None):
         if not vlc:
             self.info_label.setText("Error: python-vlc not installed")
             return
@@ -197,7 +209,7 @@ class PlayerWidget(QWidget):
             self.vlc_window.window_closed.connect(self.shutdown)
             
             self.vlc_window.show()
-            self.vlc_window.play_path(path, start_time)
+            self.vlc_window.play_path(path, start_time, referrer, subtitle)
 
             self.status_icon.setText("🎬")
             self.info_label.setText(f"Playing (VLC Window): {os.path.basename(path)}")

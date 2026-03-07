@@ -2,7 +2,7 @@ import aiosqlite
 #import sqlite3
 from typing import List, Optional, Any  # noqa: F401
 from datetime import datetime
-from .models import Series, Episode, WatchProgress, MediaTrack
+from .models import Series, Episode, WatchProgress, MediaTrack, OnlineProgress
 from ..config import DB_PATH
 from ..utils.logger import get_logger
 
@@ -75,7 +75,21 @@ class DatabaseManager:
                 )
             """)
             
-            # Migrations
+            # Online progress table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS online_progress (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    show_id TEXT NOT NULL,
+                    show_name TEXT NOT NULL,
+                    episode_number INTEGER NOT NULL,
+                    timestamp REAL DEFAULT 0.0,
+                    thumbnail_url TEXT,
+                    local_path TEXT,
+                    completed INTEGER DEFAULT 0,
+                    last_watched DATETIME,
+                    UNIQUE(show_id, episode_number)
+                )
+            """)
             async with db.execute("PRAGMA table_info(episodes)") as cursor:
                 columns = [row[1] for row in await cursor.fetchall()]
                 if 'folder_name' not in columns:
@@ -91,6 +105,16 @@ class DatabaseManager:
                     await db.execute("ALTER TABLE series ADD COLUMN rpc_image_url TEXT")
                 if 'size_bytes' not in columns:
                     await db.execute("ALTER TABLE series ADD COLUMN size_bytes INTEGER DEFAULT 0")
+            
+            # Add timestamp to online_progress if it doesn't exist
+            async with db.execute("PRAGMA table_info(online_progress)") as cursor:
+                columns = [row[1] for row in await cursor.fetchall()]
+                if 'timestamp' not in columns:
+                    await db.execute("ALTER TABLE online_progress ADD COLUMN timestamp REAL DEFAULT 0.0")
+                if 'thumbnail_url' not in columns:
+                    await db.execute("ALTER TABLE online_progress ADD COLUMN thumbnail_url TEXT")
+                if 'local_path' not in columns:
+                    await db.execute("ALTER TABLE online_progress ADD COLUMN local_path TEXT")
             
             await db.commit()
 
@@ -413,3 +437,53 @@ class DatabaseManager:
                     (series_id,)
                 )
             await db.commit()
+    # Online Progress Operations
+
+    async def update_online_progress(self, progress: OnlineProgress):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO online_progress (show_id, show_name, episode_number, timestamp, thumbnail_url, local_path, completed, last_watched)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(show_id, episode_number) DO UPDATE SET
+                   show_name = excluded.show_name,
+                   timestamp = excluded.timestamp,
+                   thumbnail_url = COALESCE(excluded.thumbnail_url, online_progress.thumbnail_url),
+                   local_path = COALESCE(excluded.local_path, online_progress.local_path),
+                   completed = excluded.completed,
+                   last_watched = excluded.last_watched""",
+                (progress.show_id, progress.show_name, progress.episode_number, progress.timestamp, progress.thumbnail_url, progress.local_path, int(progress.completed), datetime.now())
+            )
+            await db.commit()
+
+    async def get_online_progress_for_show(self, show_id: str) -> List[OnlineProgress]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM online_progress WHERE show_id = ?", (show_id,)) as cursor:
+                rows = await cursor.fetchall()
+                return [OnlineProgress(
+                    id=row['id'],
+                    show_id=row['show_id'],
+                    show_name=row['show_name'],
+                    episode_number=row['episode_number'],
+                    timestamp=row['timestamp'],
+                    thumbnail_url=row['thumbnail_url'],
+                    local_path=row['local_path'],
+                    completed=bool(row['completed']),
+                    last_watched=datetime.fromisoformat(row['last_watched']) if isinstance(row['last_watched'], str) else row['last_watched']
+                ) for row in rows]
+
+    async def get_recent_online_shows(self, limit: int = 20) -> List[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            # Get unique show_id/show_name pairs ordered by most recent last_watched
+            # Using GROUP BY and MAX(last_watched)
+            query = """
+                SELECT show_id, show_name, thumbnail_url, MAX(last_watched) as latest
+                FROM online_progress
+                GROUP BY show_id
+                ORDER BY latest DESC
+                LIMIT ?
+            """
+            async with db.execute(query, (limit,)) as cursor:
+                rows = await cursor.fetchall()
+                return [{"show_id": r["show_id"], "show_name": r["show_name"], "thumbnail_url": r["thumbnail_url"]} for r in rows]

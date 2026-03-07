@@ -16,6 +16,8 @@ mountdrive.bat
 .vscode/
 cache/
 logs/
-*.env*
+*.env
 *.txt*
 *.log
+downloads/
+ignore/

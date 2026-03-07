@@ -1,7 +1,11 @@
 import sys
 import ctypes
 import os
-from PyQt6.QtWidgets import QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog, QMessageBox, QComboBox, QApplication, QMenu, QCheckBox
+from PyQt6.QtWidgets import (
+    QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout, 
+    QPushButton, QFileDialog, QMessageBox, QComboBox, 
+    QApplication, QMenu, QCheckBox, QTabWidget
+)
 from PyQt6.QtCore import Qt
 import qasync
 import asyncio
@@ -9,6 +13,8 @@ import asyncio
 from .series_widget import SeriesWidget
 from .episode_widget import EpisodeWidget
 from .player_widget import PlayerWidget
+from .online_search_widget import OnlineSearchWidget
+from ..core.download_manager import DownloadManager
 from ..database.db import DatabaseManager
 from ..database.models import Series, Episode, WatchProgress
 from ..core.library_manager import LibraryManager
@@ -30,9 +36,17 @@ class MainWindow(QMainWindow):
 
         self.db = db_manager
         self.library = LibraryManager(self.db)
+        self.download_manager = DownloadManager()
         self.discord = DiscordManager()
+        
+        # Connect Download Signals
+        self.download_manager.task_progress.connect(self.on_download_progress)
+        self.download_manager.task_finished.connect(self.on_download_finished)
+
         self.current_episode = None
         self.current_series = None
+        self.current_online_show = None # {id, name, thumbnail}
+        self.current_online_episode = None # number
 
         self.setup_ui()
         logger.info("MainWindow initialized")
@@ -161,9 +175,42 @@ class MainWindow(QMainWindow):
         self.library_splitter.setSizes([350, 850])
         self.library_splitter.setHandleWidth(1)
         
+        # 4. Content Tabs
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName("mainTabs")
+        self.tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #333;
+                border-radius: 4px;
+                background-color: #121212;
+            }
+            QTabBar::tab {
+                background-color: #1e1e1e;
+                color: #888;
+                padding: 12px 30px;
+                margin-right: 5px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                font-weight: bold;
+                font-size: 10pt;
+            }
+            QTabBar::tab:selected {
+                background-color: #3d5afe;
+                color: white;
+            }
+            QTabBar::tab:hover:!selected {
+                background-color: #2a2a2a;
+            }
+        """)
+        
+        self.online_widget = OnlineSearchWidget(self.player_widget, self.db, self, self.download_manager)
+        
+        self.tabs.addTab(self.library_splitter, "📁 Local Library")
+        self.tabs.addTab(self.online_widget, "🌐 Online Search")
+        
         # Assemble Main Layout
         self.main_layout.addLayout(self.top_bar)
-        self.main_layout.addWidget(self.library_splitter, 1) # Takes majority of space
+        self.main_layout.addWidget(self.tabs, 1) # Takes majority of space
         self.main_layout.addWidget(self.player_widget)
 
         # Final Sync (everything now exists)
@@ -205,6 +252,8 @@ class MainWindow(QMainWindow):
     async def on_series_selected(self, series):
         logger.info(f"Series selected: {series.name}")
         self.current_series = series
+        self.current_online_show = None
+        self.current_online_episode = None
         episodes = await self.library.get_episodes(series.id)
         
         # Update selection info with correct episode count
@@ -249,6 +298,8 @@ class MainWindow(QMainWindow):
     async def on_episode_selected(self, episode):
         logger.info(f"Episode selected: {episode.filename}")
         self.current_episode = episode
+        self.current_online_show = None
+        self.current_online_episode = None
         
         progress = await self.db.get_progress(episode.id)
         start_time = progress.timestamp if progress else 0
@@ -258,44 +309,88 @@ class MainWindow(QMainWindow):
             
         self.player_widget.load_video(episode.path, start_time)
 
-    async def update_discord_rpc(self, episode=None, timestamp=None):
-        if not episode:
-            episode = self.current_episode
-        if not episode or not self.current_series:
-            return
+    async def update_discord_rpc(self, episode=None, timestamp=None, online_data=None):
+        """
+        Updates Discord Presence. 
+        If online_data is provided, it's an online stream: {show_id, show_name, ep_no, thumbnail_url}
+        """
+        if online_data:
+            self.current_episode = None
+            self.current_series = None
+            self.current_online_show = {
+                "id": online_data["show_id"],
+                "name": online_data["show_name"],
+                "thumbnail": online_data.get("thumbnail_url")
+            }
+            self.current_online_episode = online_data["ep_no"]
+            self._last_online_duration = 0
+        
+        # Determine source
+        is_online = self.current_online_show is not None
+        
+        if is_online:
+            show_name = self.current_online_show["name"]
+            ep_display = f"Episode {self.current_online_episode}"
+            thumb_path = None
+            cached_url = None
+            large_image_url = self.current_online_show["thumbnail"]
             
+            # Handle relative URLs from AllAnime
+            if large_image_url and not large_image_url.startswith("http"):
+                large_image_url = f"https://allanime.day/{large_image_url.lstrip('/')}"
+            
+            duration = self.player_widget._duration
+        else:
+            if not episode:
+                episode = self.current_episode
+            if not episode or not self.current_series:
+                return
+            
+            display_name = episode.title if episode.title else episode.filename
+            show_name = self.current_series.name
+            ep_display = display_name
+            thumb_path = self.current_series.thumbnail_path
+            cached_url = self.current_series.rpc_image_url
+            large_image_url = None
+            duration = episode.duration
+
         if timestamp is None:
             timestamp = self.player_widget._current_time
 
-        display_name = episode.title if episode.title else episode.filename
-        
         # Privacy/NSFW logic
         is_safe_mode = self.nsfw_toggle.isChecked()
-        series_name = self.current_series.name if not is_safe_mode else "Secret Series"
-        episode_display = display_name if not is_safe_mode else "Classified Episode"
-        thumb_path = self.current_series.thumbnail_path if not is_safe_mode else None
-        cached_url = self.current_series.rpc_image_url if not is_safe_mode else None
+        if is_safe_mode:
+            show_name = "Secret Series"
+            ep_display = "Classified Episode"
+            thumb_path = None
+            cached_url = None
+            large_image_url = None
 
-        # Use cached URL if available
         rpc_url = await self.discord.update_presence(
-            series=series_name,
-            episode=episode_display,
+            series=show_name,
+            episode=ep_display,
             player=self.player_widget.player_type,
             thumbnail_path=thumb_path,
             cached_thumbnail_url=cached_url,
-            duration=episode.duration,
+            large_image_url=large_image_url,
+            duration=duration,
             start_offset=timestamp,
             is_paused=self.player_widget.is_paused
         )
         
-        # If we got a new URL (upload happened), save it to DB (only if not in safe mode)
-        if not is_safe_mode and rpc_url and rpc_url != self.current_series.rpc_image_url:
+        # Cache RPC URL for local series
+        if not is_online and not is_safe_mode and rpc_url and rpc_url != self.current_series.rpc_image_url:
             logger.info(f"Caching new RPC image URL for series: {self.current_series.name}")
             self.current_series.rpc_image_url = rpc_url
             await self.db.update_series_rpc_url(self.current_series.id, rpc_url)
 
     @qasync.asyncSlot(float, float)
     async def on_progress_updated(self, current, total):
+        # Trigger RPC update if duration was previously unknown (0) but now discovered (>0)
+        if self.current_online_show and getattr(self, "_last_online_duration", 0) == 0 and total > 0:
+            self._last_online_duration = total
+            await self.update_discord_rpc(timestamp=current)
+            
         await self.save_progress(current)
 
     @qasync.asyncSlot(float)
@@ -309,11 +404,29 @@ class MainWindow(QMainWindow):
 
     @qasync.asyncSlot(float)
     async def save_progress(self, timestamp=None):
-        if not self.current_episode:
-            return
-        
         if timestamp is None:
             timestamp = self.player_widget._current_time
+            
+        if self.current_online_show:
+            # Handle Online Progress
+            from ..database.models import OnlineProgress
+            is_completed = False
+            if self.player_widget._duration > 0:
+                if timestamp / self.player_widget._duration > 0.9:
+                    is_completed = True
+            
+            progress = OnlineProgress(
+                show_id=self.current_online_show["id"],
+                show_name=self.current_online_show["name"],
+                episode_number=self.current_online_episode,
+                timestamp=timestamp,
+                completed=is_completed
+            )
+            await self.db.update_online_progress(progress)
+            return
+
+        if not self.current_episode:
+            return
             
         is_completed = False
         if self.player_widget._duration > 0:
@@ -382,6 +495,43 @@ class MainWindow(QMainWindow):
     def open_metadata_manager(self):
         self.meta_window = MetadataManager(self.db, self)
         self.meta_window.show()
+
+    def on_download_progress(self, filename, progress):
+        # Show progress in status bar if available, or just log
+        self.statusBar().showMessage(f"Downloading {filename}: {progress:.1f}%", 5000)
+
+    def on_download_finished(self, filename, success, message, metadata):
+        if success:
+            self.statusBar().showMessage(f"Download complete: {filename}", 10000)
+            
+            # Save to database
+            if self.db and metadata:
+                from ..database.models import OnlineProgress
+                from ..config import DOWNLOADS_PATH
+                
+                async def save_cache():
+                    progress = OnlineProgress(
+                        show_id=metadata['show_id'],
+                        show_name=metadata['show_name'],
+                        episode_number=int(float(metadata['ep_no'])) if str(metadata['ep_no']).replace('.','',1).isdigit() else 0,
+                        thumbnail_url=metadata.get('thumbnail_url'),
+                        local_path=os.path.join(DOWNLOADS_PATH, filename)
+                    )
+                    await self.db.update_online_progress(progress)
+                    logger.info(f"Saved local cache path for {filename} to database")
+                    
+                    # Notify online widget to refresh if it's showing the same show
+                    if hasattr(self, 'online_widget'):
+                        # This is a bit simple, but better than nothing
+                        pass
+                
+                asyncio.create_task(save_cache())
+        else:
+            self.statusBar().showMessage(f"Download failed: {filename} ({message})", 10000)
+
+    def open_online_search(self):
+        # Switch to Online tab
+        self.tabs.setCurrentIndex(1)
 
     def closeEvent(self, event):
         self.player_widget.shutdown()

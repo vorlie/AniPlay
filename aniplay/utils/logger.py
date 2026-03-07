@@ -7,11 +7,34 @@ from pathlib import Path
 def setup_logging(level=logging.INFO, log_to_file=True):
     """
     Sets up a centralized logging system for AniPlay.
-    Logs to console and optionally to a file.
+    Logs to console and optionally to a file with rotation on launch.
     """
-    # Create logs directory if it doesn't exist
     log_file = Path("aniplay.log")
+    logs_dir = Path("logs")
     
+    if log_to_file:
+        # Create logs directory if it doesn't exist
+        logs_dir.mkdir(exist_ok=True)
+        
+        # Rotate existing log file if it exists
+        if log_file.exists():
+            timestamp = datetime.fromtimestamp(log_file.stat().st_mtime).strftime("%Y%m%d_%H%M%S")
+            rotated_log = logs_dir / f"aniplay_{timestamp}.log"
+            try:
+                # Use shutil.move for safer rotation across filesystems if needed
+                import shutil
+                shutil.move(str(log_file), str(rotated_log))
+            except Exception as e:
+                print(f"Failed to rotate log: {e}")
+
+        # Cleanup old logs (keep last 10)
+        try:
+            log_files = sorted(logs_dir.glob("aniplay_*.log"), key=os.path.getmtime, reverse=True)
+            for old_log in log_files[10:]:
+                old_log.unlink()
+        except Exception as e:
+            print(f"Failed to cleanup old logs: {e}")
+
     # Define formatting
     log_format = '%(asctime)s [%(levelname)s] %(name)s (%(filename)s:%(lineno)d) - %(message)s'
     formatter = logging.Formatter(log_format)
@@ -31,6 +54,7 @@ def setup_logging(level=logging.INFO, log_to_file=True):
 
     # File Handler
     if log_to_file:
+        # Always log to the main aniplay.log for current session
         file_handler = logging.FileHandler(log_file, encoding='utf-8')
         file_handler.setFormatter(formatter)
         root_logger.addHandler(file_handler)
@@ -41,7 +65,7 @@ def setup_logging(level=logging.INFO, log_to_file=True):
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("charset_normalizer").setLevel(logging.WARNING)
 
-    logging.info(f"Logging initialized. Level: {logging.getLevelName(level)}, File: {log_file}")
+    logging.info(f"Logging initialized. Level: {logging.getLevelName(level)}, Current File: {log_file}")
 
 def get_logger(name):
     """Returns a logger with the given name."""
