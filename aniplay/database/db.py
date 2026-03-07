@@ -503,3 +503,15 @@ class DatabaseManager:
             async with db.execute(query, (limit,)) as cursor:
                 rows = await cursor.fetchall()
                 return [{"show_id": r["show_id"], "show_name": r["show_name"], "thumbnail_url": r["thumbnail_url"]} for r in rows]
+    async def get_downloaded_online_shows(self) -> List[dict]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            query = """
+                SELECT DISTINCT show_id, show_name, thumbnail_url
+                FROM online_progress
+                WHERE local_path IS NOT NULL AND local_path != ''
+                ORDER BY show_name ASC
+            """
+            async with db.execute(query) as cursor:
+                rows = await cursor.fetchall()
+                return [{"show_id": r["show_id"], "show_name": r["show_name"], "thumbnail_url": r["thumbnail_url"]} for r in rows]

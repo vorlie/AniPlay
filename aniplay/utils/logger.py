@@ -78,6 +78,7 @@ def setup_logging(level=logging.INFO, log_to_file=True):
     # Silence noisy third-party loggers
     logging.getLogger("aiosqlite").setLevel(logging.INFO)
     logging.getLogger("asyncio").setLevel(logging.INFO)
+    logging.getLogger("qasync").setLevel(logging.INFO)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("charset_normalizer").setLevel(logging.WARNING)
 

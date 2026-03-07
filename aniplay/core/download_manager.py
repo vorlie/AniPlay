@@ -25,7 +25,7 @@ from ..config import DOWNLOADS_PATH
 logger = get_logger(__name__)
 
 class DownloadTask(QObject):
-    progress_updated = pyqtSignal(str, float) # filename, percentage
+    progress_updated = pyqtSignal(str, float, str, str) # filename, percentage, speed, eta
     finished = pyqtSignal(str, bool, str, dict) # filename, success, message, metadata
     
     def __init__(self, url, filename, referrer=None, metadata=None):
@@ -44,12 +44,11 @@ class DownloadTask(QObject):
         if self.referrer:
             cmd.extend(["-headers", f"Referer: {self.referrer}\r\n"])
         
-        cmd.extend(["-i", self.url, "-c", "copy", "-bsf:a", "aac_adtstoasc", output_path])
+        cmd.extend(["-i", self.url, "-stats", "-c", "copy", "-bsf:a", "aac_adtstoasc", output_path])
         
         logger.info(f"Starting download: {' '.join(cmd)}")
         
         try:
-            # We use create_subprocess_exec to monitor stderr for duration/time to calculate progress
             self.process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -58,23 +57,67 @@ class DownloadTask(QObject):
             )
             
             duration = 0
-            async for line in self.process.stderr:
-                line_str = line.decode().strip()
+            # Use read(1024) and split by \r or \n to catch all progress updates
+            buffer = ""
+            while True:
+                chunk = await self.process.stderr.read(1024)
+                if not chunk:
+                    break
                 
-                # Try to find duration: Duration: 00:23:40.12
-                if not duration:
-                    dur_match = re.search(r"Duration: (\d+):(\d+):(\d+\.\d+)", line_str)
-                    if dur_match:
-                        h, m, s = map(float, dur_match.groups())
-                        duration = h * 3600 + m * 60 + s
+                buffer += chunk.decode(errors='replace')
+                # Progress updates in ffmpeg often use \r to overwrite the line
+                lines = re.split(r'[\r\n]+', buffer)
+                # Keep the last partial line in the buffer
+                if buffer and buffer[-1] not in ['\r', '\n']:
+                    buffer = lines.pop()
+                else:
+                    buffer = ""
                 
-                # Try to find current time: time=00:00:05.12
-                time_match = re.search(r"time=(\d+):(\d+):(\d+\.\d+)", line_str)
-                if time_match and duration > 0:
-                    h, m, s = map(float, time_match.groups())
-                    current_time = h * 3600 + m * 60 + s
-                    progress = (current_time / duration) * 100
-                    self.progress_updated.emit(self.filename, min(progress, 100.0))
+                for line_str in lines:
+                    line_str = line_str.strip()
+                    if not line_str: continue
+                    
+                    # Try to find duration: Duration: 00:23:40.12
+                    if not duration:
+                        dur_match = re.search(r"Duration: (\d+):(\d+):(\d+\.\d+)", line_str)
+                        if dur_match:
+                            h, m, s = map(float, dur_match.groups())
+                            duration = h * 3600 + m * 60 + s
+                            logger.info(f"Detected download duration: {duration}s")
+                    
+                    # Try to find current time: time=00:00:05.12
+                    time_match = re.search(r"time=(\d+):(\d+):(\d+\.\d+)", line_str)
+                    speed_match = re.search(r"speed=\s*([\d.]+[xX]?)", line_str)
+                    
+                    if time_match:
+                        speed_str = speed_match.group(1) if speed_match else "0.0x"
+                        # Extract the numeric part of speed (e.g., 54.3 from 54.3x)
+                        try:
+                            speed_val = float(re.sub(r'[xX]', '', speed_str))
+                        except:
+                            speed_val = 0.0
+                            
+                        h, m, s = map(float, time_match.groups())
+                        current_time = h * 3600 + m * 60 + s
+                        
+                        eta_str = "Unknown"
+                        if duration > 0:
+                            progress = (current_time / duration) * 100
+                            
+                            # Calculate ETA
+                            if speed_val > 0:
+                                remaining_seconds = (duration - current_time) / speed_val
+                                m_rem, s_rem = divmod(int(remaining_seconds), 60)
+                                h_rem, m_rem = divmod(m_rem, 60)
+                                if h_rem > 0:
+                                    eta_str = f"{h_rem}:{m_rem:02d}:{s_rem:02d}"
+                                else:
+                                    eta_str = f"{m_rem}:{s_rem:02d}"
+                            
+                            self.progress_updated.emit(self.filename, min(progress, 100.0), speed_str, eta_str)
+                        else:
+                            # If no duration yet, just emit 0% with speed/time
+                            self.progress_updated.emit(self.filename, 0.0, f"{speed_str} @ {int(current_time)}s", eta_str)
 
             await self.process.wait()
             
@@ -102,41 +145,70 @@ class DownloadTask(QObject):
                 pass
 
 class DownloadManager(QObject):
-    task_progress = pyqtSignal(str, float)
+    task_progress = pyqtSignal(str, float, str, str)
     task_finished = pyqtSignal(str, bool, str, dict)
+    queue_updated = pyqtSignal(int) # Number of pending tasks
     
     def __init__(self):
         super().__init__()
         self.active_tasks = {} # filename -> DownloadTask
+        self.pending_tasks = [] # list of (url, filename, referrer, metadata)
+        self.max_concurrent = 1
 
     def start_download(self, url, filename, referrer=None, metadata=None):
-        if filename in self.active_tasks:
-            logger.warning(f"Download already in progress for {filename}")
-            return False
-            
+        """Adds a download to the queue."""
         # Ensure filename is safe and has .mp4 extension
         if not filename.endswith(".mp4"):
             filename += ".mp4"
+
+        if filename in self.active_tasks or any(t[1] == filename for t in self.pending_tasks):
+            logger.warning(f"Download already in progress or queued for {filename}")
+            return False
             
-        task = DownloadTask(url, filename, referrer, metadata)
-        task.progress_updated.connect(self.task_progress.emit)
-        task.finished.connect(self._on_task_finished)
+        self.pending_tasks.append((url, filename, referrer, metadata))
+        self.queue_updated.emit(len(self.pending_tasks))
         
-        self.active_tasks[filename] = task
-        asyncio.create_task(task.run())
+        self._process_queue()
         return True
+
+    def _process_queue(self):
+        """Starts next tasks if below concurrency limit."""
+        while len(self.active_tasks) < self.max_concurrent and self.pending_tasks:
+            url, filename, referrer, metadata = self.pending_tasks.pop(0)
+            self.queue_updated.emit(len(self.pending_tasks))
+            
+            task = DownloadTask(url, filename, referrer, metadata)
+            task.progress_updated.connect(self.task_progress.emit)
+            task.finished.connect(self._on_task_finished)
+            
+            self.active_tasks[filename] = task
+            asyncio.create_task(task.run())
 
     def _on_task_finished(self, filename, success, message, metadata):
         if filename in self.active_tasks:
             del self.active_tasks[filename]
+        
         self.task_finished.emit(filename, success, message, metadata)
+        # Start next in queue
+        self._process_queue()
 
     def is_downloading(self, filename):
         if not filename.endswith(".mp4"):
             filename += ".mp4"
-        return filename in self.active_tasks
+        return filename in self.active_tasks or any(t[1] == filename for t in self.pending_tasks)
 
     def cancel_download(self, filename):
+        if not filename.endswith(".mp4"):
+            filename += ".mp4"
+
+        # Check pending
+        for i, t in enumerate(self.pending_tasks):
+            if t[1] == filename:
+                self.pending_tasks.pop(i)
+                self.queue_updated.emit(len(self.pending_tasks))
+                return True
+
+        # Check active
         if filename in self.active_tasks:
             self.active_tasks[filename].cancel()
             return True

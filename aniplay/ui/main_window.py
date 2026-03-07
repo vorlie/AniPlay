@@ -58,6 +58,7 @@ class MainWindow(QMainWindow):
         # Connect Download Signals
         self.download_manager.task_progress.connect(self.on_download_progress)
         self.download_manager.task_finished.connect(self.on_download_finished)
+        self.download_manager.queue_updated.connect(self.on_queue_updated)
 
         self.current_episode = None
         self.current_series = None
@@ -512,9 +513,17 @@ class MainWindow(QMainWindow):
         self.meta_window = MetadataManager(self.db, self)
         self.meta_window.show()
 
-    def on_download_progress(self, filename, progress):
-        # Show progress in status bar if available, or just log
-        self.statusBar().showMessage(f"Downloading {filename}: {progress:.1f}%", 5000)
+    def on_download_progress(self, filename, progress, speed, eta):
+        # Show progress, speed and ETA in status bar
+        msg = f"Downloading {filename}: {progress:.1f}% ({speed}) - ETA: {eta}"
+        if hasattr(self, '_queue_count') and self._queue_count > 0:
+            msg += f" | {self._queue_count} in queue"
+        self.statusBar().showMessage(msg, 5000)
+
+    def on_queue_updated(self, count):
+        self._queue_count = count
+        if count > 0:
+            self.statusBar().showMessage(f"Added to queue. {count} tasks pending.", 3000)
 
     def on_download_finished(self, filename, success, message, metadata):
         if success:

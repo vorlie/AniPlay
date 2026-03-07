@@ -91,11 +91,28 @@ class OnlineSearchWidget(QWidget):
         self.back_to_results_btn = QPushButton("← Back to Results")
         self.back_to_results_btn.clicked.connect(lambda: self.stack.setCurrentIndex(0))
         self.episode_label = QLabel("Episodes:")
+        
+        self.bulk_download_btn = QPushButton("📥 Bulk Download")
+        self.bulk_download_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2e7d32;
+                color: white;
+                border: none;
+                padding: 5px 15px;
+            }
+            QPushButton:hover {
+                background-color: #388e3c;
+            }
+        """)
+        self.bulk_download_btn.clicked.connect(self.on_bulk_download_clicked)
+        
         self.episode_header_layout.addWidget(self.back_to_results_btn)
         self.episode_header_layout.addWidget(self.episode_label)
         self.episode_header_layout.addStretch()
+        self.episode_header_layout.addWidget(self.bulk_download_btn)
         
         self.episodes_list = QListWidget()
+        self.episodes_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
         self.episodes_list.itemDoubleClicked.connect(self.on_episode_selected)
         
         # Add context menu for episodes
@@ -295,9 +312,41 @@ class OnlineSearchWidget(QWidget):
             
         try:
             recent = await self.db_manager.get_recent_online_shows()
-            if recent and self.stack.currentIndex() == 0 and not self.search_input.text():
-                    self.results_list.clear() # Only clear if we are showing "Recent"
+            downloaded = await self.db_manager.get_downloaded_online_shows()
+            
+            if self.stack.currentIndex() == 0 and not self.search_input.text():
+                self.results_list.clear() # Only clear if we are showing "Recent"
+                
+                if downloaded:
+                    header = QListWidgetItem("--- MY DOWNLOADS 📂 ---")
+                    header.setFlags(Qt.ItemFlag.NoItemFlags)
+                    header.setData(Qt.ItemDataRole.UserRole, None)
+                    header.setForeground(Qt.GlobalColor.gray)
+                    self.results_list.addItem(header)
+                    
+                    for show in downloaded:
+                        item = QListWidgetItem(show["show_name"])
+                        show_data = {
+                            "_id": show["show_id"], 
+                            "name": show["show_name"],
+                            "thumbnail": show.get("thumbnail_url"),
+                            "is_downloaded": True
+                        }
+                        item.setData(Qt.ItemDataRole.UserRole, show_data)
+                        self.results_list.addItem(item)
+
+                if recent:
+                    header = QListWidgetItem("--- RECENTLY WATCHED 🕒 ---")
+                    header.setFlags(Qt.ItemFlag.NoItemFlags)
+                    header.setData(Qt.ItemDataRole.UserRole, None)
+                    header.setForeground(Qt.GlobalColor.gray)
+                    self.results_list.addItem(header)
+                    
                     for show in recent:
+                        # Skip if already in downloaded to avoid duplicates
+                        if any(d['show_id'] == show['show_id'] for d in downloaded):
+                            continue
+                            
                         item = QListWidgetItem(show["show_name"])
                         show_data = {
                             "_id": show["show_id"], 
@@ -306,7 +355,8 @@ class OnlineSearchWidget(QWidget):
                         }
                         item.setData(Qt.ItemDataRole.UserRole, show_data)
                         self.results_list.addItem(item)
-                    self.status_label.setText("Loaded recently watched shows.")
+                
+                self.status_label.setText("Loaded recent and downloaded shows.")
         except Exception as e:
             logger.error(f"Error loading recent: {e}")
 
@@ -350,17 +400,18 @@ class OnlineSearchWidget(QWidget):
         self.episodes_list.clear()
         self.episode_label.setText(f"Episodes for {show_name}:")
         
+        progress_list = []
+        if self.db_manager:
+            progress_list = await self.db_manager.get_online_progress_for_show(show_id)
+            
         try:
             episodes = await self.scraper.get_episodes(show_id)
-            watched_episodes = []
-            if self.db_manager:
-                progress_list = await self.db_manager.get_online_progress_for_show(show_id)
-                watched_episodes = [p.episode_number for p in progress_list if p.completed]
+            watched_episodes = [p.episode_number for p in progress_list if p.completed]
 
             for ep in episodes:
                 try:
                     ep_int = int(float(ep))
-                except ValueError:
+                except (ValueError, TypeError):
                     ep_int = ep
                     
                 label = f"Episode {ep}"
@@ -371,34 +422,57 @@ class OnlineSearchWidget(QWidget):
                 if ep_int in watched_episodes:
                     epi_item.setForeground(Qt.GlobalColor.gray)
                 
-                epi_item.setData(Qt.ItemDataRole.UserRole, {
+                epi_data = {
                     "show_id": show_id, 
                     "ep_no": ep, 
                     "show_name": show_name,
-                    "thumbnail_url": thumbnail_url
-                })
+                    "thumbnail_url": thumbnail_url,
+                    "url": f"https://allanime.day/anime/{show_id}/episodes/{ep}", # Fallback URL
+                    "local_path": None
+                }
                 
-                # Check if downloaded (either via name or DB)
+                is_downloaded = False
                 if self.download_manager:
                     safe_name = f"{show_name} - Ep {ep}".replace("/", "_").replace("\\", "_").replace(":", "_")
                     is_downloaded = self.download_manager.get_local_path(safe_name) is not None
                     
-                    # Also check DB
                     for p in progress_list:
                         if p.episode_number == ep_int and p.local_path and os.path.exists(p.local_path):
                             is_downloaded = True
+                            epi_data["local_path"] = p.local_path
                             break
                             
                     if is_downloaded:
                         epi_item.setText(f"Episode {ep} 💾" + (" ✅" if ep_int in watched_episodes else ""))
                 
+                epi_item.setData(Qt.ItemDataRole.UserRole, epi_data)
                 self.episodes_list.addItem(epi_item)
             
             self.stack.setCurrentIndex(1)
             self.status_label.setText(f"Loaded {len(episodes)} episodes.")
         except Exception as e:
-            logger.error(f"Error loading episodes: {e}")
-            self.status_label.setText(f"Error: {e}")
+            logger.error(f"Error fetching episodes: {e}")
+            # Offline Fallback: Show only downloaded episodes
+            cached_episodes = [p for p in progress_list if p.local_path and os.path.exists(p.local_path)]
+            if cached_episodes:
+                self.status_label.setText(f"Offline Mode: Showing {len(cached_episodes)} cached episodes.")
+                for p in cached_episodes:
+                    label = f"Episode {p.episode_number} 💾"
+                    if p.completed: label += " ✅"
+                    
+                    item = QListWidgetItem(label)
+                    item.setData(Qt.ItemDataRole.UserRole, {
+                        "show_id": show_id,
+                        "ep_no": str(p.episode_number),
+                        "show_name": show_name,
+                        "thumbnail_url": thumbnail_url,
+                        "url": "", # No URL in offline mode
+                        "local_path": p.local_path
+                    })
+                    self.episodes_list.addItem(item)
+                self.stack.setCurrentIndex(1)
+            else:
+                self.status_label.setText(f"Failed to load episodes (Offline?): {e}")
 
     @qasync.asyncSlot(QListWidgetItem)
     async def on_episode_selected(self, item):
@@ -407,12 +481,33 @@ class OnlineSearchWidget(QWidget):
         ep_no = data['ep_no']
         show_name = data['show_name']
         
-        self.status_label.setText(f"Fetching links for Episode {ep_no}...")
+        self.status_label.setText(f"Checking for cached version of Ep {ep_no}...")
         self.links_list.clear()
         self.link_label.setText(f"Select Quality for {show_name} Ep {ep_no}:")
         
+        # Priority 1: Check if already cached (Bypass everything)
+        local_path = data.get('local_path')
+        if local_path and os.path.exists(local_path):
+            self.status_label.setText(f"Playing Ep {ep_no} from cache...")
+            
+            # Setup dummy progress object to satisfy on_link_selected
+            self._current_episode_progress = OnlineProgress(
+                show_id=show_id,
+                show_name=show_name,
+                episode_number=int(float(ep_no)) if str(ep_no).replace('.','',1).isdigit() else 0,
+                timestamp=0, # Will be updated by DB if exists
+                local_path=local_path,
+                thumbnail_url=data.get('thumbnail_url')
+            )
+            
+            # Use a dummy item and call on_link_selected directly
+            dummy_item = QListWidgetItem()
+            dummy_item.setData(Qt.ItemDataRole.UserRole, data)
+            self.on_link_selected(dummy_item)
+            return
+
         try:
-            links = await self.scraper.get_stream_urls(show_id, ep_no)
+            self.status_label.setText(f"Fetching links for Episode {ep_no}...")
             for link in links:
                 quality = link['quality']
                 source = link['source'].split(' (')[0]
@@ -512,6 +607,63 @@ class OnlineSearchWidget(QWidget):
             else:
                 self.status_label.setText(f"Download already in progress for {safe_name}")
 
+    @qasync.asyncSlot()
+    async def on_bulk_download_clicked(self):
+        selected_items = self.episodes_list.selectedItems()
+        if not selected_items:
+            self.status_label.setText("No episodes selected for bulk download.")
+            return
+            
+        self.status_label.setText(f"Preparing bulk download for {len(selected_items)} episodes...")
+        self.bulk_download_btn.setEnabled(False)
+        
+        try:
+            # Sort items by episode number (to queue in order)
+            selected_items.sort(key=lambda x: float(x.data(Qt.ItemDataRole.UserRole).get('ep_no', 0)))
+            
+            queued_count = 0
+            for item in selected_items:
+                episode_data = item.data(Qt.ItemDataRole.UserRole)
+                ep_url = episode_data['url']
+                ep_no = episode_data['ep_no']
+                show_name = episode_data['show_name']
+                
+                self.status_label.setText(f"Fetching links for Ep {ep_no} ({queued_count+1}/{len(selected_items)})...")
+                links = await self.scraper.get_stream_urls(episode_data.get('show_id'), ep_no)
+                
+                best_link = None
+                for link in links:
+                    if link.get('recommended'):
+                        best_link = link
+                        break
+                if not best_link and links:
+                    best_link = links[0]
+                    
+                if best_link and self.download_manager:
+                    safe_name = f"{show_name} - Ep {ep_no}".replace("/", "_").replace("\\", "_").replace(":", "_")
+                    metadata = {
+                        "show_id": episode_data.get('show_id'),
+                        "show_name": show_name,
+                        "ep_no": ep_no,
+                        "thumbnail_url": episode_data.get('thumbnail_url')
+                    }
+                    if self.download_manager.start_download(
+                        best_link['url'], 
+                        safe_name, 
+                        referrer=best_link.get('referrer'),
+                        metadata=metadata
+                    ):
+                        queued_count += 1
+            
+            self.status_label.setText(f"Successfully queued {queued_count} episodes for download.")
+            # Clear selection after queueing
+            self.episodes_list.clearSelection()
+        except Exception as e:
+            logger.error(f"Bulk download error: {e}")
+            self.status_label.setText(f"Bulk download failed at {queued_count} episodes: {e}")
+        finally:
+            self.bulk_download_btn.setEnabled(True)
+
     def on_link_selected(self, item, start_time=0):
         data = item.data(Qt.ItemDataRole.UserRole)
         url = data['url']
@@ -570,6 +722,10 @@ class OnlineSearchWidget(QWidget):
                     return
 
         # 3. Stream if no cache
+        if not url:
+            self.status_label.setText("Error: No stream link available (Offline?)")
+            return
+
         if self.player_choice.currentText() == "Internal Player" and self.player_widget:
             self.status_label.setText(f"Playing {title} in internal player...")
             self.player_widget.load_video(url, start_time=start_time, referrer=referrer, subtitle=subtitle)
