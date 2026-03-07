@@ -101,3 +101,8 @@ If your library isn't updating or seems corrupted, you can safely delete `anipla
 ### 5. WSL Permission Denied
 
 If you've mounted your drive but can't see files, ensure you are running the terminal as **Administrator** when performing the `wsl --mount` command.
+
+## ⚖️ License & Credits
+
+* **License:** This project is licensed under the [GPL-3.0 License](LICENSE).
+* **Credits:** Logic ported and inspired by the excellent [ani-cli](https://github.com/pystardust/ani-cli) project.
