@@ -25,7 +25,7 @@ from ..config import DOWNLOADS_PATH
 logger = get_logger(__name__)
 
 class DownloadTask(QObject):
-    progress_updated = pyqtSignal(str, float, str, str) # filename, percentage, speed, eta
+    progress_updated = pyqtSignal(str, float, str, str, str) # filename, percentage, speed, eta, elapsed
     finished = pyqtSignal(str, bool, str, dict) # filename, success, message, metadata
     
     def __init__(self, url, filename, referrer=None, metadata=None):
@@ -56,6 +56,8 @@ class DownloadTask(QObject):
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
             
+            import time
+            start_wall_time = time.time()
             duration = 0
             # Use read(1024) and split by \r or \n to catch all progress updates
             buffer = ""
@@ -99,8 +101,11 @@ class DownloadTask(QObject):
                             
                         h, m, s = map(float, time_match.groups())
                         current_time = h * 3600 + m * 60 + s
-                        
-                        eta_str = "Unknown"
+                        elapsed_seconds = int(time.time() - start_wall_time)
+                        m_el, s_el = divmod(elapsed_seconds, 60)
+                        h_el, m_el = divmod(m_el, 60)
+                        elapsed_str = f"{h_el}:{m_el:02d}:{s_el:02d}" if h_el > 0 else f"{m_el}:{s_el:02d}"
+
                         if duration > 0:
                             progress = (current_time / duration) * 100
                             
@@ -114,10 +119,10 @@ class DownloadTask(QObject):
                                 else:
                                     eta_str = f"{m_rem}:{s_rem:02d}"
                             
-                            self.progress_updated.emit(self.filename, min(progress, 100.0), speed_str, eta_str)
+                            self.progress_updated.emit(self.filename, min(progress, 100.0), speed_str, eta_str, elapsed_str)
                         else:
                             # If no duration yet, just emit 0% with speed/time
-                            self.progress_updated.emit(self.filename, 0.0, f"{speed_str} @ {int(current_time)}s", eta_str)
+                            self.progress_updated.emit(self.filename, 0.0, f"{speed_str} @ {int(current_time)}s", eta_str, elapsed_str)
 
             await self.process.wait()
             
@@ -145,7 +150,7 @@ class DownloadTask(QObject):
                 pass
 
 class DownloadManager(QObject):
-    task_progress = pyqtSignal(str, float, str, str)
+    task_progress = pyqtSignal(str, float, str, str, str)
     task_finished = pyqtSignal(str, bool, str, dict)
     queue_updated = pyqtSignal(int) # Number of pending tasks
     

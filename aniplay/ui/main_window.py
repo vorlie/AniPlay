@@ -513,9 +513,9 @@ class MainWindow(QMainWindow):
         self.meta_window = MetadataManager(self.db, self)
         self.meta_window.show()
 
-    def on_download_progress(self, filename, progress, speed, eta):
+    def on_download_progress(self, filename, progress, speed, eta, elapsed):
         # Show progress, speed and ETA in status bar
-        msg = f"Downloading {filename}: {progress:.1f}% ({speed}) - ETA: {eta}"
+        msg = f"Downloading {filename}: {progress:.1f}% ({speed}) - Elapsed: {elapsed} - ETA: {eta}"
         if hasattr(self, '_queue_count') and self._queue_count > 0:
             msg += f" | {self._queue_count} in queue"
         self.statusBar().showMessage(msg, 5000)

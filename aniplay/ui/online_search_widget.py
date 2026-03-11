@@ -162,9 +162,26 @@ class OnlineSearchWidget(QWidget):
         self.download_btn.hide()
         self.download_btn.clicked.connect(self.on_download_clicked)
         
+        self.play_cached_btn = QPushButton("▶ Play Now")
+        self.play_cached_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196f3;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                font-size: 11pt;
+            }
+            QPushButton:hover {
+                background-color: #42a5f5;
+            }
+        """)
+        self.play_cached_btn.hide()
+        self.play_cached_btn.clicked.connect(self.on_play_cached_clicked)
+        
         self.link_label = QLabel("Select Quality:")
         self.link_header_layout.addWidget(self.back_to_episodes_btn)
         self.link_header_layout.addWidget(self.resume_btn)
+        self.link_header_layout.addWidget(self.play_cached_btn)
         self.link_header_layout.addWidget(self.download_btn)
         self.link_header_layout.addStretch()
         self.link_header_layout.addWidget(self.link_label)
@@ -485,22 +502,44 @@ class OnlineSearchWidget(QWidget):
         self.links_list.clear()
         self.link_label.setText(f"Select Quality for {show_name} Ep {ep_no}:")
         
-        # Priority 1: Check if already cached (Bypass everything)
+        # Priority 1: Check if already cached (Bypass everything or show RESUME)
         local_path = data.get('local_path')
         if local_path and os.path.exists(local_path):
+            # Check for actual progress first
+            has_progress = False
+            if self.db_manager:
+                try:
+                    progress_list = await self.db_manager.get_online_progress_for_show(show_id)
+                    ep_float = float(int(float(ep_no)) if str(ep_no).replace('.','',1).isdigit() else 0)
+                    for p in progress_list:
+                        if p.episode_number == ep_float and p.timestamp > 5:
+                            # We have progress! Let's show the resume option
+                            self._current_episode_progress = p
+                            self.resume_btn.setText(f"▶ Resume at {self.format_time(p.timestamp)}")
+                            self.resume_btn.show()
+                            
+                            self.links_list.hide()
+                            self.link_label.setText(f"Episode {ep_no} is cached.")
+                            self.play_cached_btn.show()
+                            self.download_btn.hide()
+                            self.stack.setCurrentIndex(2)
+                            return
+                except Exception as pe:
+                    logger.error(f"Error checking cached progress: {pe}")
+
+            # No progress or skipped, just play now
             self.status_label.setText(f"Playing Ep {ep_no} from cache...")
             
-            # Setup dummy progress object to satisfy on_link_selected
+            # Setup dummy progress object
             self._current_episode_progress = OnlineProgress(
                 show_id=show_id,
                 show_name=show_name,
                 episode_number=int(float(ep_no)) if str(ep_no).replace('.','',1).isdigit() else 0,
-                timestamp=0, # Will be updated by DB if exists
+                timestamp=0,
                 local_path=local_path,
                 thumbnail_url=data.get('thumbnail_url')
             )
             
-            # Use a dummy item and call on_link_selected directly
             dummy_item = QListWidgetItem()
             dummy_item.setData(Qt.ItemDataRole.UserRole, data)
             self.on_link_selected(dummy_item)
@@ -508,6 +547,8 @@ class OnlineSearchWidget(QWidget):
 
         try:
             self.status_label.setText(f"Fetching links for Episode {ep_no}...")
+            self.play_cached_btn.hide() # Hide for online
+            self.links_list.show() # Show list for online
             for link in links:
                 quality = link['quality']
                 source = link['source'].split(' (')[0]
@@ -560,6 +601,21 @@ class OnlineSearchWidget(QWidget):
         if not self._current_episode_progress:
             return
             
+        # If we have a local path, play it directly
+        if self._current_episode_progress.local_path and os.path.exists(self._current_episode_progress.local_path):
+            self.status_label.setText("Resuming cached file...")
+            dummy_item = QListWidgetItem()
+            dummy_item.setData(Qt.ItemDataRole.UserRole, {
+                "show_id": self._current_episode_progress.show_id,
+                "ep_no": str(self._current_episode_progress.episode_number),
+                "show_name": self._current_episode_progress.show_name,
+                "thumbnail_url": self._current_episode_progress.thumbnail_url,
+                "url": "",
+                "local_path": self._current_episode_progress.local_path
+            })
+            self.on_link_selected(dummy_item, start_time=self._current_episode_progress.timestamp)
+            return
+
         best_item = None
         for i in range(self.links_list.count()):
             item = self.links_list.item(i)
@@ -606,6 +662,16 @@ class OnlineSearchWidget(QWidget):
                 self.status_label.setText(f"Started download: {safe_name}")
             else:
                 self.status_label.setText(f"Download already in progress for {safe_name}")
+
+    def on_play_cached_clicked(self):
+        if not self._current_episode_progress or not self._current_episode_progress.local_path:
+            return
+            
+        # Play from start (ignoring existing progress timestamp)
+        self.status_label.setText("Playing cached file from start...")
+        if self.player_widget:
+            self.player_widget.load_video(self._current_episode_progress.local_path, start_time=0)
+            self.player_widget.info_label.setText(f"Cached: {self._current_episode_progress.show_name} - Ep {self._current_episode_progress.episode_number}")
 
     @qasync.asyncSlot()
     async def on_bulk_download_clicked(self):
