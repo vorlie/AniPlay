@@ -1,5 +1,3 @@
-Sure thing, Charlie. Here is the raw Markdown for you to copy and paste directly into your `README.md`.
-
 # AniPlay
 
 AniPlay is a personal media server and player designed for anime libraries. It provides a sleek, modern desktop interface to manage and play your local collection with high-fidelity players.
