@@ -549,6 +549,7 @@ class OnlineSearchWidget(QWidget):
             self.status_label.setText(f"Fetching links for Episode {ep_no}...")
             self.play_cached_btn.hide() # Hide for online
             self.links_list.show() # Show list for online
+            links = await self.scraper.get_stream_urls(show_id, ep_no)
             for link in links:
                 quality = link['quality']
                 source = link['source'].split(' (')[0]
