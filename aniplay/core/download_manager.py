@@ -163,6 +163,7 @@ class DownloadManager(QObject):
     def start_download(self, url, filename, referrer=None, metadata=None):
         """Adds a download to the queue."""
         # Ensure filename is safe and has .mp4 extension
+        filename = re.sub(r'[/\\:*?"<>|]', '_', filename)
         if not filename.endswith(".mp4"):
             filename += ".mp4"
 

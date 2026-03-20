@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 import qasync
+import re
 
 from ..utils.ani_scraper import AniScraper
 from ..utils.logger import get_logger
@@ -450,7 +451,7 @@ class OnlineSearchWidget(QWidget):
                 
                 is_downloaded = False
                 if self.download_manager:
-                    safe_name = f"{show_name} - Ep {ep}".replace("/", "_").replace("\\", "_").replace(":", "_")
+                    safe_name = re.sub(r'[/\\:*?"<>|]', '_', f"{show_name} - Ep {ep}")
                     is_downloaded = self.download_manager.get_local_path(safe_name) is not None
                     
                     for p in progress_list:
@@ -650,7 +651,7 @@ class OnlineSearchWidget(QWidget):
             data = best_item.data(Qt.ItemDataRole.UserRole)
             show_name = data['show_name']
             ep_no = data['ep_no']
-            safe_name = f"{show_name} - Ep {ep_no}".replace("/", "_").replace("\\", "_").replace(":", "_")
+            safe_name = re.sub(r'[/\\:*?"<>|]', '_', f"{show_name} - Ep {ep_no}")
             
             metadata = {
                 "show_id": data.get('show_id'),
@@ -707,7 +708,7 @@ class OnlineSearchWidget(QWidget):
                     best_link = links[0]
                     
                 if best_link and self.download_manager:
-                    safe_name = f"{show_name} - Ep {ep_no}".replace("/", "_").replace("\\", "_").replace(":", "_")
+                    safe_name = re.sub(r'[/\\:*?"<>|]', '_', f"{show_name} - Ep {ep_no}")
                     metadata = {
                         "show_id": episode_data.get('show_id'),
                         "show_name": show_name,
