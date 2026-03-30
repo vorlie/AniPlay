@@ -19,6 +19,8 @@ import os
 import subprocess
 import re
 from PyQt6.QtCore import QObject, pyqtSignal
+import json
+import time
 from ..utils.logger import get_logger
 from ..config import DOWNLOADS_PATH
 
@@ -38,7 +40,14 @@ class DownloadTask(QObject):
         self._is_cancelled = False
 
     async def run(self):
-        output_path = os.path.join(DOWNLOADS_PATH, self.filename)
+        show_id = self.metadata.get('show_id')
+        base_dir = DOWNLOADS_PATH
+        if show_id:
+            show_id = re.sub(r'[/\\:*?"<>|]', '_', show_id)
+            base_dir = os.path.join(DOWNLOADS_PATH, show_id)
+            os.makedirs(base_dir, exist_ok=True)
+            
+        output_path = os.path.join(base_dir, self.filename)
         # Use ffmpeg to download. -y to overwrite, -c copy to avoid re-encoding if possible
         cmd = ["ffmpeg", "-y"]
         if self.referrer:
@@ -77,7 +86,8 @@ class DownloadTask(QObject):
                 
                 for line_str in lines:
                     line_str = line_str.strip()
-                    if not line_str: continue
+                    if not line_str: 
+                        continue
                     
                     # Try to find duration: Duration: 00:23:40.12
                     if not duration:
@@ -96,7 +106,8 @@ class DownloadTask(QObject):
                         # Extract the numeric part of speed (e.g., 54.3 from 54.3x)
                         try:
                             speed_val = float(re.sub(r'[xX]', '', speed_str))
-                        except:
+                        except Exception as e:
+                            logger.error(f"Error parsing speed for {self.filename}: {e}")
                             speed_val = 0.0
                             
                         h, m, s = map(float, time_match.groups())
@@ -146,7 +157,8 @@ class DownloadTask(QObject):
         if self.process:
             try:
                 self.process.terminate()
-            except:
+            except Exception as e:
+                logger.error(f"Error occurred while terminating process for {self.filename}: {e}")
                 pass
 
 class DownloadManager(QObject):
@@ -154,11 +166,17 @@ class DownloadManager(QObject):
     task_finished = pyqtSignal(str, bool, str, dict)
     queue_updated = pyqtSignal(int) # Number of pending tasks
     
-    def __init__(self):
+    def __init__(self, db_manager=None):
         super().__init__()
+        self.db = db_manager
         self.active_tasks = {} # filename -> DownloadTask
         self.pending_tasks = [] # list of (url, filename, referrer, metadata)
-        self.max_concurrent = 1
+        self.history = [] # list of {filename, success, message, metadata, timestamp}
+        self.task_states = {} # filename -> {status, progress, speed, eta, elapsed, metadata}
+        self.max_concurrent = 2 # Increased to 2 for better UX
+        
+        if self.db:
+            asyncio.create_task(self._load_from_db())
 
     def start_download(self, url, filename, referrer=None, metadata=None):
         """Adds a download to the queue."""
@@ -172,10 +190,30 @@ class DownloadManager(QObject):
             return False
             
         self.pending_tasks.append((url, filename, referrer, metadata))
+        self.task_states[filename] = {
+            "status": "Queued",
+            "progress": 0.0,
+            "speed": "0.0x",
+            "eta": "Waiting...",
+            "elapsed": "0:00",
+            "metadata": metadata or {}
+        }
         self.queue_updated.emit(len(self.pending_tasks))
         
+        if self.db:
+            from ..database.models import DownloadTaskState
+            asyncio.create_task(self.db.update_download_task(DownloadTaskState(
+                filename=filename, url=url, status="Queued", referrer=referrer,
+                metadata_json=json.dumps(metadata or {})
+            )))
+            
         self._process_queue()
         return True
+
+    def process_queue(self):
+        """Public method to manually trigger queue processing."""
+        logger.info("Manually triggering queue processing...")
+        self._process_queue()
 
     def _process_queue(self):
         """Starts next tasks if below concurrency limit."""
@@ -184,17 +222,56 @@ class DownloadManager(QObject):
             self.queue_updated.emit(len(self.pending_tasks))
             
             task = DownloadTask(url, filename, referrer, metadata)
-            task.progress_updated.connect(self.task_progress.emit)
+            task.progress_updated.connect(self._on_task_progress)
             task.finished.connect(self._on_task_finished)
             
             self.active_tasks[filename] = task
+            self.task_states[filename]["status"] = "Downloading"
             asyncio.create_task(task.run())
+
+    def _on_task_progress(self, filename, progress, speed, eta, elapsed):
+        if filename in self.task_states:
+            self.task_states[filename].update({
+                "progress": progress,
+                "speed": speed,
+                "eta": eta,
+                "elapsed": elapsed
+            })
+        self.task_progress.emit(filename, progress, speed, eta, elapsed)
 
     def _on_task_finished(self, filename, success, message, metadata):
         if filename in self.active_tasks:
             del self.active_tasks[filename]
         
+        self.history.insert(0, {
+            "filename": filename,
+            "success": success,
+            "message": message,
+            "metadata": metadata,
+            "timestamp": time.time()
+        })
+        
+        if filename in self.task_states:
+            self.task_states[filename]["status"] = "Finished" if success else "Failed"
+            if not success:
+                self.task_states[filename]["message"] = message
+        
+        # Keep history reasonable
+        if len(self.history) > 50:
+            self.history.pop()
+
         self.task_finished.emit(filename, success, message, metadata)
+        
+        if self.db:
+            from ..database.models import DownloadTaskState
+            state = self.task_states.get(filename, {})
+            asyncio.create_task(self.db.update_download_task(DownloadTaskState(
+                filename=filename, url="", status="Finished" if success else "Failed",
+                progress=state.get("progress", 100.0 if success else 0.0),
+                speed=state.get("speed", ""), eta=state.get("eta", ""), elapsed=state.get("elapsed", ""),
+                metadata_json=json.dumps(metadata or {})
+            )))
+
         # Start next in queue
         self._process_queue()
 
@@ -202,6 +279,20 @@ class DownloadManager(QObject):
         if not filename.endswith(".mp4"):
             filename += ".mp4"
         return filename in self.active_tasks or any(t[1] == filename for t in self.pending_tasks)
+
+    def force_start_task(self, filename):
+        """Tries to move a specific task to the front of the queue and start it."""
+        if filename in self.active_tasks:
+            return True
+            
+        # Find in pending
+        for i, t in enumerate(self.pending_tasks):
+            if t[1] == filename:
+                task_data = self.pending_tasks.pop(i)
+                self.pending_tasks.insert(0, task_data)
+                self._process_queue()
+                return True
+        return False
 
     def cancel_download(self, filename):
         if not filename.endswith(".mp4"):
@@ -217,16 +308,85 @@ class DownloadManager(QObject):
         # Check active
         if filename in self.active_tasks:
             self.active_tasks[filename].cancel()
+            if self.db:
+                asyncio.create_task(self.db.remove_download_task(filename))
             return True
         return False
 
-    def get_local_path(self, filename):
+    async def _load_from_db(self):
+        """Reloads tasks from database on startup."""
+        if not self.db: 
+            return
+        tasks = await self.db.get_all_download_tasks()
+        for t in tasks:
+            meta = {}
+            try: 
+                meta = json.loads(t.metadata_json)
+            except Exception as e: 
+                logger.error(f"Error parsing metadata for {t.filename}: {e}")
+                pass
+            
+            self.task_states[t.filename] = {
+                "status": t.status,
+                "progress": t.progress,
+                "speed": t.speed,
+                "eta": t.eta,
+                "elapsed": t.elapsed,
+                "metadata": meta
+            }
+            if t.status == "Queued":
+                self.pending_tasks.append((t.url, t.filename, t.referrer, meta))
+            elif t.status in ["Finished", "Failed", "Cancelled"]:
+                self.history.append({
+                    "filename": t.filename,
+                    "success": t.status == "Finished",
+                    "message": t.status if t.status != "Finished" else "Success",
+                    "metadata": meta,
+                    "timestamp": t.last_updated.timestamp()
+                })
+        
+        if self.pending_tasks:
+            self.queue_updated.emit(len(self.pending_tasks))
+            self._process_queue()
+
+    def get_local_path(self, filename, show_id=None):
         if not filename.endswith(".mp4"):
             filename += ".mp4"
+            
+        # 1. Check in subfolder (New organized way)
+        if show_id:
+            show_id = re.sub(r'[/\\:*?"<>|]', '_', show_id)
+            path = os.path.join(DOWNLOADS_PATH, show_id, filename)
+            if os.path.exists(path):
+                # Also check if it's currently downloading
+                if filename in self.active_tasks:
+                    return None
+                return path
+                
+        # 2. Check in base folder (Old way / Migration fallback)
         path = os.path.join(DOWNLOADS_PATH, filename)
         if os.path.exists(path):
-            # Also check if it's currently downloading
             if filename in self.active_tasks:
                 return None
             return path
+            
         return None
+
+    def get_all_tasks(self):
+        """Returns all tasks (active, pending, history) for UI display."""
+        return {
+            "active": self.active_tasks.keys(),
+            "pending": [t[1] for t in self.pending_tasks],
+            "history": self.history,
+            "states": self.task_states
+        }
+
+    def clear_history(self):
+        self.history = []
+        if self.db:
+            asyncio.create_task(self.db.clear_download_history())
+        # Also clean up task_states for finished/failed tasks
+        to_remove = [fn for fn, state in self.task_states.items() 
+                     if state["status"] in ["Finished", "Failed", "Cancelled"]]
+        for fn in to_remove:
+            del self.task_states[fn]

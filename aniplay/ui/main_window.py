@@ -14,7 +14,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import sys
 import ctypes
 import os
 from PyQt6.QtWidgets import (
@@ -30,13 +29,14 @@ from .series_widget import SeriesWidget
 from .episode_widget import EpisodeWidget
 from .player_widget import PlayerWidget
 from .online_search_widget import OnlineSearchWidget
+from .downloads_widget import DownloadsWidget
 from ..core.download_manager import DownloadManager
 from ..database.db import DatabaseManager
-from ..database.models import Series, Episode, WatchProgress
+from ..database.models import WatchProgress
 from ..core.library_manager import LibraryManager
 from ..core.discord_manager import DiscordManager
 from .metadata_manager import MetadataManager
-from ..config import DEFAULT_LIBRARY_PATH, PREFERRED_PLAYER
+from ..config import PREFERRED_PLAYER
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -52,7 +52,7 @@ class MainWindow(QMainWindow):
 
         self.db = db_manager
         self.library = LibraryManager(self.db)
-        self.download_manager = DownloadManager()
+        self.download_manager = DownloadManager(self.db)
         self.discord = DiscordManager()
         
         # Connect Download Signals
@@ -221,9 +221,11 @@ class MainWindow(QMainWindow):
         """)
         
         self.online_widget = OnlineSearchWidget(self.player_widget, self.db, self, self.download_manager)
+        self.downloads_widget = DownloadsWidget(self.download_manager)
         
         self.tabs.addTab(self.library_splitter, "📁 Local Library")
         self.tabs.addTab(self.online_widget, "🌐 Online Search")
+        self.tabs.addTab(self.downloads_widget, "📥 Downloads")
         
         # Assemble Main Layout
         self.main_layout.addLayout(self.top_bar)
@@ -459,9 +461,16 @@ class MainWindow(QMainWindow):
 
     @qasync.asyncSlot()
     async def on_playback_finished(self):
+        logger.info("Playback finished. Handling next steps...")
         if self.current_episode:
             await self.save_progress(timestamp=self.player_widget._duration)
+        elif self.current_online_show:
+            await self.save_progress()
             
+        # Small delay to let the player window close properly and the UI breathe
+        # This helps prevent freezes during rapid window creation/destruction
+        await asyncio.sleep(0.5)
+        
         # 2. Try to play the next one automatically
         await self.play_next_episode()
 
@@ -514,11 +523,11 @@ class MainWindow(QMainWindow):
         self.meta_window.show()
 
     def on_download_progress(self, filename, progress, speed, eta, elapsed):
-        # Show progress, speed and ETA in status bar
-        msg = f"Downloading {filename}: {progress:.1f}% ({speed}) - Elapsed: {elapsed} - ETA: {eta}"
-        if hasattr(self, '_queue_count') and self._queue_count > 0:
-            msg += f" | {self._queue_count} in queue"
-        self.statusBar().showMessage(msg, 5000)
+        # We don't need to show detailed progress in status bar anymore as we have a dedicated page
+        # but let's show a small indicator if we are not on the downloads tab
+        if self.tabs.currentIndex() != 2:
+            msg = f"Downloading {filename}: {progress:.1f}% ({speed})"
+            self.statusBar().showMessage(msg, 2000)
 
     def on_queue_updated(self, count):
         self._queue_count = count
@@ -532,7 +541,6 @@ class MainWindow(QMainWindow):
             # Save to database
             if self.db and metadata:
                 from ..database.models import OnlineProgress
-                from ..config import DOWNLOADS_PATH
                 
                 async def save_cache():
                     progress = OnlineProgress(
@@ -540,7 +548,7 @@ class MainWindow(QMainWindow):
                         show_name=metadata['show_name'],
                         episode_number=int(float(metadata['ep_no'])) if str(metadata['ep_no']).replace('.','',1).isdigit() else 0,
                         thumbnail_url=metadata.get('thumbnail_url'),
-                        local_path=os.path.join(DOWNLOADS_PATH, filename)
+                        local_path=self.download_manager.get_local_path(filename, metadata.get('show_id'))
                     )
                     await self.db.update_online_progress(progress)
                     logger.info(f"Saved local cache path for {filename} to database")

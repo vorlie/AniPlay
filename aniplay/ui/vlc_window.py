@@ -17,7 +17,7 @@
 import os
 import vlc
 from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QSlider, QFrame, QComboBox
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPoint
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QWheelEvent
 from ..utils.format_utils import format_time
 from ..utils.media_matcher import MediaMatcher
@@ -448,8 +448,11 @@ class VlcPlayerWindow(QMainWindow):
 
         state = self.player.get_state()
         if state in [vlc.State.Ended, vlc.State.Error]:
+            logger.info(f"Playback reached end state: {state}")
+            self.poll_timer.stop()
             self.playback_finished.emit()
-            self.close()
+            # De-couple closing from the signal handler to avoid nested event loop issues
+            QTimer.singleShot(100, self.close)
 
     def _format_time(self, seconds: float) -> str:
         return format_time(seconds)
@@ -534,15 +537,18 @@ class VlcPlayerWindow(QMainWindow):
         # via the standard window controls (the "X" button).
         if hasattr(self, 'player') and self.player:
             try:
+                state = self.player.get_state()
                 if os.name == 'nt':
                     self.player.set_hwnd(0)
                 else:
                     self.player.set_xwindow(0)
                 
-                # Stop synchronously, but detached from the GUI handle
-                self.player.stop()
-            except Exception:
-                pass
+                # If it's already ended, don't call stop() synchronously if we can avoid it
+                # as it might hang waiting for the final frame to release
+                if state not in [vlc.State.Ended, vlc.State.Stopped]:
+                    self.player.stop()
+            except Exception as e:
+                logger.debug(f"Error during player stop: {e}")
         
         # Signal that we are closing
         self.window_closed.emit()

@@ -18,7 +18,7 @@ import aiosqlite
 #import sqlite3
 from typing import List, Optional, Any  # noqa: F401
 from datetime import datetime
-from .models import Series, Episode, WatchProgress, MediaTrack, OnlineProgress
+from .models import Series, Episode, WatchProgress, MediaTrack, OnlineProgress, DownloadTaskState
 from ..config import DB_PATH
 from ..utils.logger import get_logger
 
@@ -104,6 +104,23 @@ class DatabaseManager:
                     completed INTEGER DEFAULT 0,
                     last_watched DATETIME,
                     UNIQUE(show_id, episode_number)
+                )
+            """)
+            
+            # Download Tasks table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS download_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    filename TEXT NOT NULL UNIQUE,
+                    url TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    progress REAL DEFAULT 0.0,
+                    speed TEXT,
+                    eta TEXT,
+                    elapsed TEXT,
+                    referrer TEXT,
+                    metadata_json TEXT DEFAULT '{}',
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             async with db.execute("PRAGMA table_info(episodes)") as cursor:
@@ -515,3 +532,50 @@ class DatabaseManager:
             async with db.execute(query) as cursor:
                 rows = await cursor.fetchall()
                 return [{"show_id": r["show_id"], "show_name": r["show_name"], "thumbnail_url": r["thumbnail_url"]} for r in rows]
+
+    # Download Task Operations
+
+    async def update_download_task(self, task: DownloadTaskState):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO download_tasks (filename, url, status, progress, speed, eta, elapsed, referrer, metadata_json, last_updated)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(filename) DO UPDATE SET
+                   status = excluded.status,
+                   progress = excluded.progress,
+                   speed = excluded.speed,
+                   eta = excluded.eta,
+                   elapsed = excluded.elapsed,
+                   last_updated = excluded.last_updated""",
+                (task.filename, task.url, task.status, task.progress, task.speed, task.eta, task.elapsed, task.referrer, task.metadata_json, datetime.now())
+            )
+            await db.commit()
+
+    async def get_all_download_tasks(self) -> List[DownloadTaskState]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM download_tasks ORDER BY last_updated DESC") as cursor:
+                rows = await cursor.fetchall()
+                return [DownloadTaskState(
+                    id=row['id'],
+                    filename=row['filename'],
+                    url=row['url'],
+                    status=row['status'],
+                    progress=row['progress'],
+                    speed=row['speed'],
+                    eta=row['eta'],
+                    elapsed=row['elapsed'],
+                    referrer=row['referrer'],
+                    metadata_json=row['metadata_json'],
+                    last_updated=datetime.fromisoformat(row['last_updated']) if isinstance(row['last_updated'], str) else row['last_updated']
+                ) for row in rows]
+
+    async def remove_download_task(self, filename: str):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM download_tasks WHERE filename = ?", (filename,))
+            await db.commit()
+
+    async def clear_download_history(self):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM download_tasks WHERE status IN ('Finished', 'Failed', 'Cancelled')")
+            await db.commit()

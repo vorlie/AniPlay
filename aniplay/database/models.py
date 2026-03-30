@@ -73,3 +73,17 @@ class OnlineProgress:
     completed: bool = False
     last_watched: datetime = field(default_factory=datetime.now)
     id: Optional[int] = None
+
+@dataclass
+class DownloadTaskState:
+    filename: str
+    url: str
+    status: str
+    progress: float = 0.0
+    speed: str = "0.0x"
+    eta: str = ""
+    elapsed: str = ""
+    referrer: Optional[str] = None
+    metadata_json: str = "{}"
+    last_updated: datetime = field(default_factory=datetime.now)
+    id: Optional[int] = None
