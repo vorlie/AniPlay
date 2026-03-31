@@ -20,6 +20,11 @@ from PyQt6.QtWidgets import (
     QPushButton, QProgressBar, QScrollArea, QFrame
 )
 from PyQt6.QtCore import Qt, pyqtSignal
+import qasync
+import asyncio
+from ..utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 class DownloadItemWidget(QFrame):
     cancel_requested = pyqtSignal(str) # filename
@@ -39,13 +44,10 @@ class DownloadItemWidget(QFrame):
         self.setStyleSheet("""
             DownloadItemWidget {
                 background-color: #1e1e1e;
-                border: 1px solid #333;
-                border-radius: 12px;
-                margin-bottom: 5px;
+                border-radius: 10px;
             }
             DownloadItemWidget:hover {
                 background-color: #252525;
-                border: 1px solid #444;
             }
             QLabel#filename {
                 font-weight: bold;
@@ -72,18 +74,15 @@ class DownloadItemWidget(QFrame):
                 border-radius: 4px;
             }
             QPushButton {
-                background-color: transparent;
-                border: 1px solid #444;
-                border-radius: 6px;
-                padding: 5px 10px;
-                font-size: 9pt;
+                background-color: #2a2a2a;
+                padding: 5px 12px;
             }
             QPushButton:hover {
-                background-color: #333;
+                background-color: #353535;
             }
             QPushButton#cancel_btn {
                 color: #f44336;
-                border-color: rgba(244, 67, 54, 0.3);
+                background-color: rgba(244, 67, 54, 0.05);
             }
             QPushButton#cancel_btn:hover {
                 background-color: rgba(244, 67, 54, 0.1);
@@ -212,7 +211,7 @@ class DownloadsWidget(QWidget):
         # Header
         self.header = QFrame()
         self.header.setFixedHeight(60)
-        self.header.setStyleSheet("background-color: #1a1a1a; border-bottom: 1px solid #333;")
+        self.header.setStyleSheet("background-color: #1a1a1a;")
         self.header_layout = QHBoxLayout(self.header)
         
         self.title_label = QLabel("📥 Downloads")
@@ -221,6 +220,13 @@ class DownloadsWidget(QWidget):
         self.clear_btn = QPushButton("🧹 Clear History")
         self.clear_btn.clicked.connect(self.clear_history)
         
+        self.manage_btn = QPushButton("🗂️ Manage Library")
+        self.manage_btn.setFixedHeight(40)
+        self.manage_btn.clicked.connect(self.open_library_manager)
+        
+        self.header_layout.addWidget(self.title_label)
+        self.header_layout.addStretch()
+        self.header_layout.addWidget(self.manage_btn)
         self.process_btn = QPushButton("▶ Process Queue")
         self.process_btn.clicked.connect(self.download_manager.process_queue)
         self.process_btn.setStyleSheet("""
@@ -230,8 +236,6 @@ class DownloadsWidget(QWidget):
             }
         """)
         
-        self.header_layout.addWidget(self.title_label)
-        self.header_layout.addStretch()
         self.header_layout.addWidget(self.process_btn)
         self.header_layout.addWidget(self.clear_btn)
         
@@ -330,3 +334,17 @@ class DownloadsWidget(QWidget):
         
         for filename in to_remove:
             self.remove_item(filename)
+
+    def open_library_manager(self):
+        # Switch to Library Manager tab in main window
+        parent = self.parent()
+        while parent and not hasattr(parent, 'tabs'):
+            parent = parent.parent()
+            
+        if parent:
+            # Assuming Library Manager is the 4th tab (index 3)
+            # Find the index dynamically if possible
+            for i in range(parent.tabs.count()):
+                if "Library Manager" in parent.tabs.tabText(i):
+                    parent.tabs.setCurrentIndex(i)
+                    break

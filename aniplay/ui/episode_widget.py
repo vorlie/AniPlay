@@ -16,6 +16,7 @@
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QListWidget, QListWidgetItem, QLabel, QHBoxLayout, QProgressBar, QFrame, QPushButton, QMenu, QTabWidget
 from PyQt6.QtCore import pyqtSignal, Qt, QSize
+from .selection_info_widget import SelectionInfoWidget
 from ..database.models import Episode, WatchProgress
 from ..utils.format_utils import format_size, format_time
 
@@ -32,26 +33,24 @@ class EpisodeItem(QFrame):
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setStyleSheet(f"""
             #EpisodeItem {{
-                background-color: rgba(255, 255, 255, 0.02);
-                border-radius: 10px;
-                border: 1px solid {"#00c853" if is_completed else "rgba(255, 255, 255, 0.05)"};
+                background-color: #1e1e1e;
+                border-radius: 8px;
             }}
             #EpisodeItem:hover {{
-                background-color: rgba(255, 255, 255, 0.05);
-                border: 1px solid #00c853;
+                background-color: #252525;
             }}
         """)
         
         self.main_layout = QHBoxLayout(self)
         self.main_layout.setContentsMargins(20, 15, 20, 15)
-        self.main_layout.setSpacing(20)
+        self.main_layout.setSpacing(10)
         
         # Info Container (Title + Progress)
         self.info_container = QWidget()
         self.info_container.setStyleSheet("background: transparent;")
         self.info_layout = QVBoxLayout(self.info_container)
         self.info_layout.setContentsMargins(0, 0, 0, 0)
-        self.info_layout.setSpacing(8)
+        self.info_layout.setSpacing(2)
         
         season_str = f"S{episode.season_number:02d}" if episode.season_number is not None else ""
         ep_str = f"E{episode.episode_number:02d}" if episode.episode_number is not None else ""
@@ -136,22 +135,17 @@ class EpisodeItem(QFrame):
             self.main_layout.addWidget(self.check_label)
 
         # Play Button
-        self.play_btn = QPushButton("▶ Play")
+        self.play_btn = QPushButton("▶️ Play")
         self.play_btn.setFixedSize(90, 40)
         self.play_btn.setStyleSheet("""
             QPushButton {
-                background-color: #00c853;
+                background-color: #3d5afe;
                 color: white;
-                border-radius: 8px;
+                border-radius: 6px;
                 font-weight: bold;
-                font-size: 13px;
-                border: none;
             }
             QPushButton:hover {
-                background-color: #00e676;
-            }
-            QPushButton:pressed {
-                background-color: #00a040;
+                background-color: #536dfe;
             }
         """)
         self.play_btn.clicked.connect(lambda: self.play_clicked.emit(self.episode))
@@ -167,20 +161,25 @@ class EpisodeWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setContentsMargins(20, 20, 20, 20)
+        self.layout.setSpacing(12)
         
-        self.header = QLabel("Episodes")
-        self.header.setStyleSheet("""
-            font-size: 24px; 
-            font-weight: bold; 
-            margin: 15px 0px 10px 0px;
-            color: rgba(255, 255, 255, 0.9);
-        """)
-        self.layout.addWidget(self.header)
+        self.header_layout = QHBoxLayout()
+        self.header_label = QLabel("Episodes")
+        self.header_label.setStyleSheet("font-size: 16pt; font-weight: bold; color: #fff;")
+        
+        self.selection_info = SelectionInfoWidget()
+        
+        self.header_layout.addWidget(self.header_label)
+        self.header_layout.addSpacing(15)
+        self.header_layout.addWidget(self.selection_info)
+        self.header_layout.addStretch()
+        
+        self.layout.addLayout(self.header_layout)
         
         # Container for the current list view or tab widget
         self.container_layout = QVBoxLayout()
-        self.layout.addLayout(self.container_layout)
+        self.layout.addLayout(self.container_layout, 1) # Give it all vertical weight
         
         self.episode_map = {} # ID -> Episode object
         self.current_lists = [] # To keep track of all list widgets used
@@ -191,15 +190,8 @@ class EpisodeWidget(QWidget):
         lw.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         lw.customContextMenuRequested.connect(self._show_context_menu)
         lw.setStyleSheet("""
-            QListWidget {
-                background-color: transparent;
-                border: none;
-            }
             QListWidget::item {
-                border-radius: 10px;
-            }
-            QListWidget::item:selected {
-                background-color: transparent;
+                border-radius: 8px;
             }
         """)
         lw.itemDoubleClicked.connect(self._on_item_clicked)
@@ -211,7 +203,7 @@ class EpisodeWidget(QWidget):
             item = self.container_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        
+                
         self.episode_map = {}
         self.current_lists = []
         progress_map = progress_map or {}
@@ -234,7 +226,12 @@ class EpisodeWidget(QWidget):
         else:
             # Tabbed view
             self.tabs = QTabWidget()
-            self.tabs.setStyleSheet("")
+            self.tabs.setStyleSheet("""
+                QTabBar::tab {
+                    padding: 8px 15px;
+                    font-size: 9pt;
+                }
+            """)
             self.container_layout.addWidget(self.tabs)
             
             # Sort groups (Main first, then S01, S02, etc, then others)

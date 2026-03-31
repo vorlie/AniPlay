@@ -27,6 +27,7 @@ import qasync
 import re
 
 from ..utils.ani_scraper import AniScraper
+from ..utils.nyaa_scraper import NyaaScraper
 from ..utils.logger import get_logger
 from ..database.models import OnlineProgress
 
@@ -35,7 +36,10 @@ logger = get_logger(__name__)
 class OnlineSearchWidget(QWidget):
     def __init__(self, player_widget=None, db_manager=None, main_window=None, download_manager=None):
         super().__init__()
-        self.scraper = AniScraper()
+        self.all_anime_scraper = AniScraper()
+        self.nyaa_scraper = NyaaScraper()
+        self.scraper = self.all_anime_scraper # Default
+        
         self.player_widget = player_widget
         self.db_manager = db_manager
         self.main_window = main_window
@@ -62,6 +66,28 @@ class OnlineSearchWidget(QWidget):
         self.search_btn = QPushButton("🔍 Search")
         self.search_btn.clicked.connect(self.run_search)
         
+        # New: Nyaa filters
+        self.nyaa_filter_container = QWidget()
+        self.nyaa_filter_layout = QHBoxLayout(self.nyaa_filter_container)
+        self.nyaa_filter_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.filter_input = QLineEdit()
+        self.filter_input.setPlaceholderText("Filter (Web-DL, etc.)")
+        self.filter_input.setFixedWidth(150)
+        self.filter_input.returnPressed.connect(self.run_search)
+        
+        self.res_filter = QComboBox()
+        self.res_filter.addItems(["Any Res", "1080p", "720p", "480p"])
+        self.res_filter.setFixedWidth(80)
+        
+        self.nyaa_filter_layout.addWidget(self.filter_input)
+        self.nyaa_filter_layout.addWidget(self.res_filter)
+        self.nyaa_filter_container.hide() 
+        
+        self.provider_choice = QComboBox()
+        self.provider_choice.addItems(["AllAnime", "Nyaa.si"])
+        self.provider_choice.currentIndexChanged.connect(self.on_provider_changed)
+        
         self.player_choice = QComboBox()
         self.player_choice.addItems(["Internal Player", "External mpv"])
         self.player_choice.setToolTip("Select playback method")
@@ -69,6 +95,10 @@ class OnlineSearchWidget(QWidget):
         self.search_layout.addWidget(self.search_input, 1)
         self.search_layout.addWidget(self.search_btn)
         self.search_layout.addSpacing(10)
+        self.search_layout.addWidget(self.nyaa_filter_container)
+        self.search_layout.addSpacing(10)
+        self.search_layout.addWidget(self.provider_choice)
+        self.search_layout.addSpacing(5)
         self.search_layout.addWidget(self.player_choice)
         
         self.main_layout.addLayout(self.search_layout)
@@ -89,7 +119,7 @@ class OnlineSearchWidget(QWidget):
         self.episodes_layout = QVBoxLayout(self.episodes_page)
         
         self.episode_header_layout = QHBoxLayout()
-        self.back_to_results_btn = QPushButton("← Back to Results")
+        self.back_to_results_btn = QPushButton("⬅️ Back to Results")
         self.back_to_results_btn.clicked.connect(lambda: self.stack.setCurrentIndex(0))
         self.episode_label = QLabel("Episodes:")
         
@@ -98,8 +128,6 @@ class OnlineSearchWidget(QWidget):
             QPushButton {
                 background-color: #2e7d32;
                 color: white;
-                border: none;
-                padding: 5px 15px;
             }
             QPushButton:hover {
                 background-color: #388e3c;
@@ -112,8 +140,6 @@ class OnlineSearchWidget(QWidget):
             QPushButton {
                 background-color: #1565c0;
                 color: white;
-                border: none;
-                padding: 5px 15px;
             }
             QPushButton:hover {
                 background-color: #1976d2;
@@ -129,7 +155,6 @@ class OnlineSearchWidget(QWidget):
         self.episode_header_layout.addWidget(self.queue_selected_btn)
         
         self.episodes_list = QListWidget()
-        self.episodes_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
         self.episodes_list.itemDoubleClicked.connect(self.on_episode_selected)
         
         # Add context menu for episodes
@@ -144,16 +169,14 @@ class OnlineSearchWidget(QWidget):
         self.links_page = QWidget()
         self.links_layout = QVBoxLayout(self.links_page)
         self.link_header_layout = QHBoxLayout()
-        self.back_to_episodes_btn = QPushButton("← Back to Episodes")
+        self.back_to_episodes_btn = QPushButton("⬅️ Back to Episodes")
         self.back_to_episodes_btn.clicked.connect(lambda: self.stack.setCurrentIndex(1))
         
-        self.resume_btn = QPushButton("▶ Resume at 0:00")
+        self.resume_btn = QPushButton("▶️ Resume at 0:00")
         self.resume_btn.setStyleSheet("""
             QPushButton {
                 background-color: #3d5afe;
                 color: white;
-                border: none;
-                padding: 10px 20px;
                 font-size: 11pt;
             }
             QPushButton:hover {
@@ -168,8 +191,6 @@ class OnlineSearchWidget(QWidget):
             QPushButton {
                 background-color: #2e7d32;
                 color: white;
-                border: none;
-                padding: 10px 20px;
                 font-size: 11pt;
             }
             QPushButton:hover {
@@ -179,13 +200,11 @@ class OnlineSearchWidget(QWidget):
         self.download_btn.hide()
         self.download_btn.clicked.connect(self.on_download_clicked)
         
-        self.play_cached_btn = QPushButton("▶ Play Now")
+        self.play_cached_btn = QPushButton("▶️ Play Now")
         self.play_cached_btn.setStyleSheet("""
             QPushButton {
                 background-color: #2196f3;
                 color: white;
-                border: none;
-                padding: 10px 20px;
                 font-size: 11pt;
             }
             QPushButton:hover {
@@ -216,68 +235,21 @@ class OnlineSearchWidget(QWidget):
         self.status_label.setStyleSheet("color: #888; font-style: italic;")
         self.main_layout.addWidget(self.status_label)
 
+    def on_provider_changed(self, index):
+        if index == 0:
+            self.scraper = self.all_anime_scraper
+            self.search_input.setPlaceholderText("Search for anime...")
+            self.nyaa_filter_container.hide()
+        else:
+            self.scraper = self.nyaa_scraper
+            self.search_input.setPlaceholderText("Search Nyaa.si (e.g. Gintama)...")
+            self.nyaa_filter_container.show()
+
     def apply_styles(self):
         self.setStyleSheet("""
-            QWidget {
-                background-color: #121212;
-                color: #e0e0e0;
-                font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            }
-            QLineEdit {
-                background-color: #1e1e1e;
-                border: 1px solid #333;
-                border-radius: 8px;
-                padding: 10px;
-                selection-background-color: #3d5afe;
-            }
-            QLineEdit:focus {
-                border: 1px solid #3d5afe;
-            }
-            QPushButton {
-                background-color: #1e1e1e;
-                border: 1px solid #333;
-                border-radius: 8px;
-                padding: 10px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #2a2a2a;
-                border: 1px solid #444;
-            }
-            QPushButton:pressed {
-                background-color: #3d5afe;
-                color: white;
-            }
-            QListWidget {
-                background-color: #1e1e1e;
-                border: 1px solid #333;
-                border-radius: 12px;
-                padding: 5px;
-                outline: none;
-            }
             QListWidget::item {
-                padding: 12px;
                 border-radius: 8px;
-                margin: 2px 5px;
-            }
-            QListWidget::item:hover {
-                background-color: #2a2a2a;
-            }
-            QListWidget::item:selected {
-                background-color: #3d5afe;
-                color: white;
-            }
-            QComboBox {
-                background-color: #1e1e1e;
-                border: 1px solid #333;
-                border-radius: 8px;
-                padding: 5px 10px;
-            }
-            QComboBox::drop-down {
-                border: 0px;
-            }
-            QLabel {
-                font-size: 10pt;
+                padding: 8px;
             }
         """)
 
@@ -345,6 +317,51 @@ class OnlineSearchWidget(QWidget):
             return f"{h}:{m:02d}:{s:02d}"
         return f"{m}:{s:02d}"
 
+    def create_episode_widget(self, item, label, is_watched, ep_progress):
+        from PyQt6.QtWidgets import QCheckBox
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        # Add internal margins to compensate for the removed CSS padding
+        layout.setContentsMargins(8, 0, 8, 0)
+        
+        checkbox = QCheckBox()
+        
+        label_w = QLabel(label)
+        label_w.setStyleSheet("font-size: 11pt;")
+        if is_watched:
+            label_w.setStyleSheet("font-size: 11pt; color: gray;")
+            
+        play_btn = QPushButton()
+        play_btn.setFixedSize(80, 28)
+        play_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196f3;
+                color: white;
+                border-radius: 4px;
+                font-size: 9pt;
+                font-weight: bold;
+                padding: 2px 0px;
+            }
+            QPushButton:hover {
+                background-color: #42a5f5;
+            }
+        """)
+        
+        if ep_progress and ep_progress.timestamp > 5:
+            play_btn.setText(f"▶️ {self.format_time(ep_progress.timestamp)}")
+            play_btn.setToolTip("Resume episode")
+        else:
+            play_btn.setText("▶️ Play")
+            
+        play_btn.clicked.connect(lambda _, i=item: self.play_episode_direct(i))
+        
+        layout.addWidget(checkbox, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(label_w, 1, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(play_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        
+        widget.checkbox = checkbox
+        return widget
+
     async def load_recent(self):
         if not self.db_manager:
             return
@@ -390,7 +407,8 @@ class OnlineSearchWidget(QWidget):
                         show_data = {
                             "_id": show["show_id"], 
                             "name": show["show_name"],
-                            "thumbnail": show.get("thumbnail_url")
+                            "thumbnail": show.get("thumbnail_url"),
+                            "allmanga_id": show.get("allmanga_id")
                         }
                         item.setData(Qt.ItemDataRole.UserRole, show_data)
                         self.results_list.addItem(item)
@@ -399,12 +417,39 @@ class OnlineSearchWidget(QWidget):
         except Exception as e:
             logger.error(f"Error loading recent: {e}")
 
+    @qasync.asyncSlot(str, str)
+    async def search_by_id(self, show_id, show_name=None):
+        """Triggers a search/load for a specific anime ID."""
+        if not show_name:
+            show_name = show_id
+        logger.info(f"Triggering direct load for ID: {show_id} ({show_name})")
+        # Build a minimal item to satisfy on_anime_selected
+        from PyQt6.QtWidgets import QListWidgetItem
+        item = QListWidgetItem()
+        item.setData(Qt.ItemDataRole.UserRole, {"_id": show_id, "name": show_name})
+        await self.on_anime_selected(item)
+        # Also switch back to search results stack
+        self.stack.setCurrentIndex(0)
+
     @qasync.asyncSlot()
     async def run_search(self):
         query = self.search_input.text().strip()
         if not query:
             await self.load_recent()
             return
+        
+        # Append filters if Nyaa
+        if self.provider_choice.currentIndex() == 1:
+            filters = []
+            if self.res_filter.currentText() != "Any Res":
+                filters.append(self.res_filter.currentText())
+            
+            manual_filter = self.filter_input.text().strip()
+            if manual_filter:
+                filters.append(manual_filter)
+                
+            if filters:
+                query += " " + " ".join(filters)
         
         self.search_btn.setEnabled(False)
         self.status_label.setText(f"Searching for '{query}'...")
@@ -413,7 +458,17 @@ class OnlineSearchWidget(QWidget):
         try:
             results = await self.scraper.search(query)
             for res in results:
-                item = QListWidgetItem(f"{res['name']} ({res['_id']})")
+                if res.get('is_nyaa'):
+                    label = f"[{res['size']}] {res['name']} (S:{res['seeders']} L:{res['leechers']})"
+                    res['display_name'] = res['name']
+                    res['show_name'] = res['name']
+                else:
+                    label = f"{res['name']} ({res['_id']})"
+                    res['display_name'] = res['name']
+                    res['show_name'] = res['name']
+                    res['allmanga_id'] = res['_id'] # Store original ID
+                
+                item = QListWidgetItem(label)
                 item.setData(Qt.ItemDataRole.UserRole, res)
                 self.results_list.addItem(item)
             
@@ -431,9 +486,13 @@ class OnlineSearchWidget(QWidget):
     @qasync.asyncSlot(QListWidgetItem)
     async def on_anime_selected(self, item):
         data = item.data(Qt.ItemDataRole.UserRole)
-        show_id = data['_id']
-        show_name = data['name']
-        thumbnail_url = data.get('thumbnail')
+        show_id = data.get('_id') or data.get('show_id')
+        show_name = data.get('name') or data.get('show_name')
+        thumbnail_url = data.get('thumbnail') or data.get('thumbnail_url')
+        allmanga_id = data.get('allmanga_id')
+        
+        provider = "nyaa" if data.get('is_nyaa') else self.provider_choice.currentText().lower()
+        mode = "sub" # Default to sub since no mode_choice in UI
         
         self.status_label.setText(f"Loading episodes for {show_name}...")
         self.episodes_list.clear()
@@ -442,38 +501,51 @@ class OnlineSearchWidget(QWidget):
         progress_list = []
         if self.db_manager:
             progress_list = await self.db_manager.get_online_progress_for_show(show_id)
+            # If we have any progress, it might have the allmanga_id we need
+            if not allmanga_id and progress_list:
+                allmanga_id = progress_list[0].allmanga_id
             
+        # Determine which scraper to use
+        is_nyaa = data.get('is_nyaa', False) or (show_id.startswith('nyaa-') if show_id else False)
+        current_scraper = self.nyaa_scraper if is_nyaa else self.all_anime_scraper
+        
         try:
-            episodes = await self.scraper.get_episodes(show_id)
+            # Pass show_name and allmanga_id/nyaa_query for prefix-robust handling
+            if is_nyaa:
+                query_term = data.get('nyaa_query') or show_name
+                episodes = await current_scraper.get_episodes(show_id, show_name=query_term)
+            else:
+                # Use allmanga_id if available, fallback to show_id
+                target_id = allmanga_id if allmanga_id else show_id
+                episodes = await current_scraper.get_episodes(target_id, mode=mode, show_name=show_name)
             watched_episodes = [p.episode_number for p in progress_list if p.completed]
 
             for ep in episodes:
                 try:
                     ep_int = int(float(ep))
                 except (ValueError, TypeError):
-                    ep_int = ep
-                    
+                    ep_int = 0
+
                 label = f"Episode {ep}"
                 if ep_int in watched_episodes:
                     label += " ✅"
-                
-                epi_item = QListWidgetItem(label)
-                if ep_int in watched_episodes:
-                    epi_item.setForeground(Qt.GlobalColor.gray)
                 
                 epi_data = {
                     "show_id": show_id, 
                     "ep_no": ep, 
                     "show_name": show_name,
                     "thumbnail_url": thumbnail_url,
-                    "url": f"https://allanime.day/anime/{show_id}/episodes/{ep}", # Fallback URL
-                    "local_path": None
+                    "url": data.get('magnet') or data.get('torrent_url') or f"https://allanime.day/anime/{show_id}/episodes/{ep}", 
+                    "local_path": None,
+                    "is_nyaa": is_nyaa,
+                    "allmanga_id": allmanga_id,
+                    "nyaa_query": data.get('nyaa_query')
                 }
                 
                 is_downloaded = False
                 if self.download_manager:
                     safe_name = re.sub(r'[/\\:*?"<>|]', '_', f"{show_name} - Ep {ep}")
-                    is_downloaded = self.download_manager.get_local_path(safe_name, show_id) is not None
+                    is_downloaded = self.download_manager.get_local_path(safe_name, show_id, ep_no=ep) is not None
                     
                     for p in progress_list:
                         if p.episode_number == ep_int and p.local_path and os.path.exists(p.local_path):
@@ -482,15 +554,24 @@ class OnlineSearchWidget(QWidget):
                             break
                             
                     if is_downloaded:
-                        epi_item.setText(f"Episode {ep} 💾" + (" ✅" if ep_int in watched_episodes else ""))
+                        label = f"Episode {ep} 💾" + (" ✅" if ep_int in watched_episodes else "")
                 
+                epi_item = QListWidgetItem()
                 epi_item.setData(Qt.ItemDataRole.UserRole, epi_data)
+                
                 self.episodes_list.addItem(epi_item)
+                
+                ep_progress = next((p for p in progress_list if p.episode_number == ep_int), None)
+                from PyQt6.QtCore import QSize
+                widget = self.create_episode_widget(epi_item, label, ep_int in watched_episodes, ep_progress)
+                epi_item.setSizeHint(QSize(0, 42))
+                self.episodes_list.setItemWidget(epi_item, widget)
             
             self.stack.setCurrentIndex(1)
             self.status_label.setText(f"Loaded {len(episodes)} episodes.")
         except Exception as e:
             logger.error(f"Error fetching episodes: {e}")
+
             # Offline Fallback: Show only downloaded episodes
             cached_episodes = [p for p in progress_list if p.local_path and os.path.exists(p.local_path)]
             if cached_episodes:
@@ -500,16 +581,25 @@ class OnlineSearchWidget(QWidget):
                     if p.completed: 
                         label += " ✅"
                     
-                    item = QListWidgetItem(label)
+                    item = QListWidgetItem()
+                    
                     item.setData(Qt.ItemDataRole.UserRole, {
                         "show_id": show_id,
                         "ep_no": str(p.episode_number),
                         "show_name": show_name,
                         "thumbnail_url": thumbnail_url,
                         "url": "", # No URL in offline mode
-                        "local_path": p.local_path
+                        "local_path": p.local_path,
+                        "is_nyaa": is_nyaa,
+                        "allmanga_id": allmanga_id,
+                        "nyaa_query": data.get('nyaa_query')
                     })
                     self.episodes_list.addItem(item)
+                    
+                    from PyQt6.QtCore import QSize
+                    widget = self.create_episode_widget(item, label, p.completed, p)
+                    item.setSizeHint(QSize(0, 42))
+                    self.episodes_list.setItemWidget(item, widget)
                 self.stack.setCurrentIndex(1)
             else:
                 self.status_label.setText(f"Failed to load episodes (Offline?): {e}")
@@ -520,6 +610,8 @@ class OnlineSearchWidget(QWidget):
         show_id = data['show_id']
         ep_no = data['ep_no']
         show_name = data['show_name']
+        
+        self._current_episode_progress = None
         
         self.status_label.setText(f"Checking for cached version of Ep {ep_no}...")
         self.links_list.clear()
@@ -572,11 +664,27 @@ class OnlineSearchWidget(QWidget):
             self.status_label.setText(f"Fetching links for Episode {ep_no}...")
             self.play_cached_btn.hide() # Hide for online
             self.links_list.show() # Show list for online
-            links = await self.scraper.get_stream_urls(show_id, ep_no)
+            
+            is_nyaa = data.get('is_nyaa', False) or (show_id.startswith('nyaa-') if show_id else False)
+            current_scraper = self.nyaa_scraper if is_nyaa else self.all_anime_scraper
+            mode = "sub" # Default to sub
+            
+            # Always pass show_name/nyaa_query for prefix-robust handling
+            if is_nyaa:
+                query_term = data.get('nyaa_query') or show_name
+                links = await current_scraper.get_stream_urls(show_id, ep_no, show_name=query_term)
+            else:
+                links = await current_scraper.get_stream_urls(show_id, ep_no, mode=mode, show_name=show_name)
             for link in links:
-                quality = link['quality']
-                source = link['source'].split(' (')[0]
-                label = f"{quality} - {source}"
+                if is_nyaa:
+                    # Show full Nyaa title + seeders
+                    size = link['quality'].split(' - ')[-1] if ' - ' in link['quality'] else "?"
+                    label = f"[{link['seeders']}s] {link['source']} ({size})"
+                else:
+                    quality = link['quality']
+                    source = link['source'].split(' (')[0]
+                    label = f"{quality} - {source}"
+                
                 if link.get('recommended'):
                     label += " (Recommended ⭐)"
                 
@@ -589,7 +697,9 @@ class OnlineSearchWidget(QWidget):
                     "show_id": show_id, 
                     "show_name": show_name, 
                     "ep_no": ep_no,
-                    "thumbnail_url": data.get("thumbnail_url")
+                    "thumbnail_url": data.get("thumbnail_url"),
+                    "is_nyaa": data.get('is_nyaa'),
+                    "allmanga_id": data.get('allmanga_id')
                 })
                 self.links_list.addItem(link_item)
             
@@ -620,11 +730,99 @@ class OnlineSearchWidget(QWidget):
         except Exception as e:
             logger.error(f"Error fetching links: {e}")
             self.status_label.setText(f"Error: {e}")
+    @qasync.asyncSlot()
+    async def play_episode_direct(self, item):
+        """Directly plays the best available stream or cached file, no link-selection page."""
+        data = item.data(Qt.ItemDataRole.UserRole)
+        show_id = data['show_id']
+        ep_no = data['ep_no']
+        show_name = data['show_name']
+        
+        self._current_episode_progress = None
+        self.status_label.setText(f"Starting Episode {ep_no}...")
+        
+        # --- 1. Check progress for start time ---
+        start_time = 0
+        if self.db_manager:
+            try:
+                progress_list = await self.db_manager.get_online_progress_for_show(show_id)
+                ep_float = float(int(float(ep_no)) if str(ep_no).replace('.','',1).isdigit() else 0)
+                for p in progress_list:
+                    if p.episode_number == ep_float:
+                        self._current_episode_progress = p
+                        if p.timestamp > 5:
+                            start_time = p.timestamp
+                        break
+            except Exception as e:
+                logger.error(f"Error checking progress for direct play: {e}")
+        
+        # --- 2. Try to play from local cache first ---
+        local_path = data.get('local_path')
+        if not local_path and self.download_manager:
+            safe_name = re.sub(r'[/\\:*?"<>|]', '_', f"{show_name} - Ep {ep_no}")
+            local_path = self.download_manager.get_local_path(safe_name, show_id, ep_no=ep_no)
+        
+        if local_path and os.path.exists(local_path):
+            self.status_label.setText(f"Playing Episode {ep_no} from cache...")
+            dummy_data = {**data, "url": "", "local_path": local_path}
+            dummy_item = QListWidgetItem()
+            dummy_item.setData(Qt.ItemDataRole.UserRole, dummy_data)
+            if not self._current_episode_progress:
+                self._current_episode_progress = OnlineProgress(
+                    show_id=show_id, show_name=show_name,
+                    episode_number=int(float(ep_no)) if str(ep_no).replace('.','',1).isdigit() else 0,
+                    timestamp=start_time, local_path=local_path,
+                    thumbnail_url=data.get('thumbnail_url')
+                )
+            self.on_link_selected(dummy_item, start_time=start_time)
+            return
+        
+        # --- 3. No cache — fetch links and auto-pick best one ---
+        try:
+            is_nyaa = data.get('is_nyaa', False) or (show_id.startswith('nyaa-') if show_id else False)
+            current_scraper = self.nyaa_scraper if is_nyaa else self.all_anime_scraper
+            
+            if is_nyaa:
+                query_term = data.get('nyaa_query') or show_name
+                links = await current_scraper.get_stream_urls(show_id, ep_no, show_name=query_term)
+            else:
+                links = await current_scraper.get_stream_urls(show_id, ep_no, mode="sub", show_name=show_name)
+            
+            if not links:
+                self.status_label.setText(f"No links found for Episode {ep_no}. Try opening manually.")
+                # Fall back to showing the full links page
+                self.on_episode_selected(item)
+                return
+            
+            # Pick recommended, else highest quality, else first
+            best = next((l for l in links if l.get('recommended')), links[0])
+            
+            best_item = QListWidgetItem()
+            best_item.setData(Qt.ItemDataRole.UserRole, {
+                **best,
+                "show_id": show_id,
+                "show_name": show_name,
+                "ep_no": ep_no,
+                "thumbnail_url": data.get('thumbnail_url'),
+                "is_nyaa": data.get('is_nyaa'),
+                "allmanga_id": data.get('allmanga_id'),
+                "nyaa_query": data.get('nyaa_query'),
+            })
+            self.status_label.setText(f"Playing Episode {ep_no} via {best.get('source', 'stream')}...")
+            self.on_link_selected(best_item, start_time=start_time)
+            
+        except Exception as e:
+            logger.error(f"Error in direct play for ep {ep_no}: {e}")
+            self.status_label.setText(f"Error starting playback: {e}")
+            # Fall back to showing the full links page
+            self.on_episode_selected(item)
+
 
     def on_resume_clicked(self):
         if not self._current_episode_progress:
             return
             
+
         # If we have a local path, play it directly
         if self._current_episode_progress.local_path and os.path.exists(self._current_episode_progress.local_path):
             self.status_label.setText("Resuming cached file...")
@@ -673,7 +871,16 @@ class OnlineSearchWidget(QWidget):
             data = best_item.data(Qt.ItemDataRole.UserRole)
             show_name = data['show_name']
             ep_no = data['ep_no']
-            safe_name = re.sub(r'[/\\:*?"<>|]', '_', f"{show_name} - Ep {ep_no}")
+            
+            # For Nyaa, use original title as filename or a sanitized version
+            if data.get('is_nyaa'):
+                show_name = data.get('original_name', data.get('source', show_name))
+                safe_name = re.sub(r'[/\\:*?"<>|]', '_', show_name)
+                # Keep original extension if possible or default to .mp4
+                if not any(safe_name.lower().endswith(ext) for ext in ['.mkv', '.mp4', '.avi']):
+                    safe_name += ".mp4"
+            else:
+                safe_name = re.sub(r'[/\\:*?"<>|]', '_', f"{show_name} - Ep {ep_no}")
             
             metadata = {
                 "show_id": data.get('show_id'),
@@ -699,9 +906,15 @@ class OnlineSearchWidget(QWidget):
 
     @qasync.asyncSlot()
     async def on_queue_selected_clicked(self):
-        selected_items = self.episodes_list.selectedItems()
+        selected_items = []
+        for i in range(self.episodes_list.count()):
+            item = self.episodes_list.item(i)
+            widget = self.episodes_list.itemWidget(item)
+            if widget and hasattr(widget, 'checkbox') and widget.checkbox.isChecked():
+                selected_items.append(item)
+                
         if not selected_items:
-            self.status_label.setText("No episodes selected for queueing.")
+            self.status_label.setText("No episodes checked for queueing.")
             return
             
         self.status_label.setText(f"Preparing queue for {len(selected_items)} episodes...")
@@ -727,7 +940,10 @@ class OnlineSearchWidget(QWidget):
                     logger.debug(f"Episode already in queue or failed: {item.text()}")
             
             self.status_label.setText(f"Added {queued_count} new episodes to queue.")
-            self.episodes_list.clearSelection()
+            for item in selected_items:
+                widget = self.episodes_list.itemWidget(item)
+                if widget and hasattr(widget, 'checkbox'):
+                    widget.checkbox.setChecked(False)
         except Exception as e:
             logger.error(f"Queue selection error: {e}")
             self.status_label.setText(f"Queueing failed: {e}")
@@ -768,7 +984,12 @@ class OnlineSearchWidget(QWidget):
             return False
 
         try:
-            links = await self.scraper.get_stream_urls(episode_data.get('show_id'), ep_no)
+            is_nyaa = episode_data.get('is_nyaa', False)
+            current_scraper = self.nyaa_scraper if is_nyaa else self.scraper
+            if is_nyaa:
+                links = await current_scraper.get_stream_urls(episode_data.get('show_id'), ep_no, show_name=show_name)
+            else:
+                links = await current_scraper.get_stream_urls(episode_data.get('show_id'), ep_no)
             best_link = None
             for link in links:
                 if link.get('recommended'):
@@ -809,11 +1030,13 @@ class OnlineSearchWidget(QWidget):
                 from ..database.models import OnlineProgress
                 await self.db_manager.update_online_progress(OnlineProgress(
                     show_id=data.get('show_id'),
-                    show_name=show_name,
+                    show_name=data.get('display_name', show_name),
                     episode_number=int(float(ep_no)) if str(ep_no).replace('.','',1).isdigit() else 0,
-                    timestamp=start_time,
+                    timestamp=float(start_time) if start_time is not None else 0.0,
                     thumbnail_url=data.get('thumbnail_url'),
-                    completed=False
+                    completed=False,
+                    allmanga_id=data.get('allmanga_id'),
+                    nyaa_query=data.get('nyaa_query')
                 ))
                 await self.load_recent()
             
@@ -822,7 +1045,7 @@ class OnlineSearchWidget(QWidget):
         if self.main_window:
             asyncio.create_task(self.main_window.update_discord_rpc(online_data={
                 "show_id": data.get('show_id'),
-                "show_name": show_name,
+                "show_name": data.get('display_name', show_name),
                 "ep_no": ep_no,
                 "thumbnail_url": data.get('thumbnail_url')
             }, timestamp=start_time))
@@ -835,7 +1058,7 @@ class OnlineSearchWidget(QWidget):
         
         if not local_path and self.download_manager:
             safe_name = f"{show_name} - Ep {ep_no}".replace("/", "_").replace("\\", "_").replace(":", "_")
-            local_path = self.download_manager.get_local_path(safe_name, data.get('show_id'))
+            local_path = self.download_manager.get_local_path(safe_name, data.get('show_id'), ep_no=ep_no)
             
         if local_path:
             logger.info(f"Using cached file: {local_path}")
@@ -854,6 +1077,16 @@ class OnlineSearchWidget(QWidget):
         # 3. Stream if no cache
         if not url:
             self.status_label.setText("Error: No stream link available (Offline?)")
+            return
+
+        if url.startswith("magnet:"):
+            # For torrents, we can't 'stream' directly yet. Use system handler or suggest download.
+            self.status_label.setText("Opening magnet link in your default torrent client...")
+            try:
+                os.startfile(url)
+            except Exception as e:
+                logger.error(f"Error opening magnet: {e}")
+                self.status_label.setText(f"Failed to open magnet. Please download it first.")
             return
 
         if self.player_choice.currentText() == "Internal Player" and self.player_widget:

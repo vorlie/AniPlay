@@ -72,6 +72,8 @@ class OnlineProgress:
     local_path: Optional[str] = None
     completed: bool = False
     last_watched: datetime = field(default_factory=datetime.now)
+    allmanga_id: Optional[str] = None
+    nyaa_query: Optional[str] = None
     id: Optional[int] = None
 
 @dataclass
@@ -87,3 +89,12 @@ class DownloadTaskState:
     metadata_json: str = "{}"
     last_updated: datetime = field(default_factory=datetime.now)
     id: Optional[int] = None
+
+@dataclass
+class PlannerEntry:
+    show_name: str
+    id: Optional[int] = None
+    show_id: Optional[str] = None
+    status: str = "Plan to Watch"
+    notes: str = ""
+    date_added: datetime = field(default_factory=datetime.now)

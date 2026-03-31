@@ -30,6 +30,9 @@ from .episode_widget import EpisodeWidget
 from .player_widget import PlayerWidget
 from .online_search_widget import OnlineSearchWidget
 from .downloads_widget import DownloadsWidget
+from .planner_widget import PlannerWidget
+from .library_manager_widget import LibraryManagerWidget
+from .planner_widget import PlannerWidget
 from ..core.download_manager import DownloadManager
 from ..database.db import DatabaseManager
 from ..database.models import WatchProgress
@@ -81,6 +84,10 @@ class MainWindow(QMainWindow):
         self.player_widget.playback_paused.connect(self.on_playback_paused)
         self.player_widget.playback_resumed.connect(self.on_playback_resumed)
         self.player_widget.playback_finished.connect(self.on_playback_finished)
+        
+        # 2. Planner & Search Integration
+        self.planner_widget = PlannerWidget(self.db)
+        self.planner_widget.search_requested.connect(self.dispatch_planner_search)
         
         # 2. Top Bar: Actions
         self.top_bar = QHBoxLayout()
@@ -197,17 +204,21 @@ class MainWindow(QMainWindow):
         self.tabs.setObjectName("mainTabs")
         self.tabs.setStyleSheet("""
             QTabWidget::pane {
-                border: 1px solid #333;
-                border-radius: 4px;
+                border: none;
                 background-color: #121212;
+                margin-top: -1px;
+            }
+            QTabBar {
+                background-color: transparent;
+                border: none;
+                margin-bottom: 5px;
             }
             QTabBar::tab {
-                background-color: #1e1e1e;
+                background-color: transparent;
                 color: #888;
-                padding: 12px 30px;
-                margin-right: 5px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
+                padding: 10px 25px;
+                margin-right: 4px;
+                border-radius: 8px;
                 font-weight: bold;
                 font-size: 10pt;
             }
@@ -216,16 +227,103 @@ class MainWindow(QMainWindow):
                 color: white;
             }
             QTabBar::tab:hover:!selected {
+                background-color: rgba(255, 255, 255, 0.05);
+            }
+            
+            /* Global Minimalist Defaults for children */
+            QPushButton {
+                background-color: #1e1e1e;
+                border: none;
+                border-radius: 8px;
+                padding: 8px 16px;
+                color: #e0e0e0;
+                font-weight: bold;
+            }
+            QPushButton:hover {
                 background-color: #2a2a2a;
+            }
+            QPushButton:pressed {
+                background-color: #353535;
+            }
+            
+            QLineEdit {
+                background-color: #1e1e1e;
+                border: 1px solid transparent;
+                border-radius: 8px;
+                padding: 10px 15px;
+                color: #ffffff;
+            }
+            QLineEdit:focus {
+                border: 1px solid #3d5afe;
+            }
+            
+            QListWidget {
+                background-color: transparent;
+                border: none;
+                outline: none;
+            }
+            QListWidget::item {
+                border-radius: 8px;
+                padding: 5px;
+            }
+            QListWidget::item:selected {
+                background-color: rgba(61, 90, 254, 0.2);
+                color: #ffffff;
+                border: 1px solid #3d5afe;
+            }
+            
+            QComboBox {
+                background-color: #1e1e1e;
+                border: none;
+                border-radius: 8px;
+                padding: 8px 15px;
+                color: #e0e0e0;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+            
+            QScrollBar:vertical {
+                border: none;
+                background: transparent;
+                width: 8px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #333;
+                border-radius: 4px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #444;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            
+            QSplitter::handle {
+                background-color: transparent;
+            }
+            QSplitter::handle:horizontal {
+                width: 1px;
+                background-color: #333;
             }
         """)
         
         self.online_widget = OnlineSearchWidget(self.player_widget, self.db, self, self.download_manager)
         self.downloads_widget = DownloadsWidget(self.download_manager)
+        self.library_manager_widget = LibraryManagerWidget(self.db)
         
         self.tabs.addTab(self.library_splitter, "📁 Local Library")
         self.tabs.addTab(self.online_widget, "🌐 Online Search")
         self.tabs.addTab(self.downloads_widget, "📥 Downloads")
+        self.tabs.addTab(self.library_manager_widget, "🗂️ Library Manager")
+        self.tabs.addTab(self.planner_widget, "📋 Planner")
         
         # Assemble Main Layout
         self.main_layout.addLayout(self.top_bar)
@@ -276,7 +374,7 @@ class MainWindow(QMainWindow):
         episodes = await self.library.get_episodes(series.id)
         
         # Update selection info with correct episode count
-        self.series_widget.selection_info.update_info(series.name, len(episodes), series.size_bytes)
+        self.episode_widget.selection_info.update_info(series.name, len(episodes), series.size_bytes)
         
         # Fetch progress for all episodes in this series
         progress_map = {}
@@ -339,7 +437,9 @@ class MainWindow(QMainWindow):
             self.current_online_show = {
                 "id": online_data["show_id"],
                 "name": online_data["show_name"],
-                "thumbnail": online_data.get("thumbnail_url")
+                "thumbnail": online_data.get("thumbnail_url"),
+                "allmanga_id": online_data.get("allmanga_id"),
+                "nyaa_query": online_data.get("nyaa_query")
             }
             self.current_online_episode = online_data["ep_no"]
             self._last_online_duration = 0
@@ -434,12 +534,19 @@ class MainWindow(QMainWindow):
                 if timestamp / self.player_widget._duration > 0.9:
                     is_completed = True
             
+            try:
+                ep_num = int(float(self.current_online_episode))
+            except (ValueError, TypeError):
+                ep_num = 0
+
             progress = OnlineProgress(
                 show_id=self.current_online_show["id"],
                 show_name=self.current_online_show["name"],
-                episode_number=self.current_online_episode,
+                episode_number=ep_num,
                 timestamp=timestamp,
-                completed=is_completed
+                completed=is_completed,
+                allmanga_id=self.current_online_show.get("allmanga_id"),
+                nyaa_query=self.current_online_show.get("nyaa_query")
             )
             await self.db.update_online_progress(progress)
             return
@@ -548,7 +655,7 @@ class MainWindow(QMainWindow):
                         show_name=metadata['show_name'],
                         episode_number=int(float(metadata['ep_no'])) if str(metadata['ep_no']).replace('.','',1).isdigit() else 0,
                         thumbnail_url=metadata.get('thumbnail_url'),
-                        local_path=self.download_manager.get_local_path(filename, metadata.get('show_id'))
+                        local_path=self.download_manager.get_local_path(filename, metadata.get('show_id'), ep_no=metadata.get('ep_no'))
                     )
                     await self.db.update_online_progress(progress)
                     logger.info(f"Saved local cache path for {filename} to database")
@@ -565,6 +672,13 @@ class MainWindow(QMainWindow):
     def open_online_search(self):
         # Switch to Online tab
         self.tabs.setCurrentIndex(1)
+
+    @qasync.asyncSlot(str, str)
+    async def dispatch_planner_search(self, show_id, show_name):
+        # Switch to Online Search tab
+        self.tabs.setCurrentIndex(1)
+        # Trigger the search in OnlineSearchWidget
+        await self.online_widget.search_by_id(show_id, show_name)
 
     def closeEvent(self, event):
         self.player_widget.shutdown()

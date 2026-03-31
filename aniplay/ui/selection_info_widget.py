@@ -22,27 +22,26 @@ from ..utils.format_utils import format_size, format_time
 class SelectionInfoWidget(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(50)
+        self.setFixedHeight(40)
         self.setObjectName("SelectionInfoWidget")
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setStyleSheet("""
             #SelectionInfoWidget {
-                background-color: rgba(61, 90, 254, 0.1);
-                border: 1px solid rgba(61, 90, 254, 0.2);
-                border-radius: 10px;
-                margin-bottom: 15px;
+                background-color: rgba(61, 90, 254, 0.08);
+                border: none;
+                border-radius: 6px;
             }
             QLabel {
-                color: rgba(255, 255, 255, 0.9);
-                font-size: 14px;
+                color: #e0e0e0;
+                font-size: 13px;
             }
             .title {
                 font-weight: bold;
                 color: #3d5afe;
             }
             .meta {
-                color: rgba(255, 255, 255, 0.6);
-                font-size: 12px;
+                color: #888;
+                font-size: 11px;
             }
         """)
         
@@ -54,7 +53,7 @@ class SelectionInfoWidget(QFrame):
         self.name_label.setProperty("class", "title")
         self.layout.addWidget(self.name_label)
         
-        self.layout.addStretch()
+        self.layout.addSpacing(20)
         
         self.episodes_label = QLabel("")
         self.episodes_label.setProperty("class", "meta")

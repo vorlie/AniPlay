@@ -97,7 +97,15 @@ class AniScraper:
             data = resp.json()
             return data.get("data", {}).get("shows", {}).get("edges", [])
 
-    async def get_episodes(self, show_id: str, mode: str = "sub") -> List[str]:
+    async def get_episodes(self, show_id: str, mode: str = "sub", show_name: str = None) -> List[str]:
+        # If show_id starts with allanime-, it's a hash and won't work with the API.
+        # Try to find the original ID by searching for the name.
+        if show_id.startswith("allanime-") and show_name:
+            results = await self.search(show_name, mode=mode)
+            if results:
+                show_id = results[0]['_id']
+                logger.info(f"Resolved hashed ID {show_id} via name search for {show_name}")
+
         episodes_list_gql = """
         query ($showId: String!) {
             show( _id: $showId ) {
@@ -121,7 +129,13 @@ class AniScraper:
             details = data.get("data", {}).get("show", {}).get("availableEpisodesDetail", {})
             return sorted(details.get(mode, []), key=lambda x: float(x) if x.replace('.', '', 1).isdigit() else 0)
 
-    async def get_stream_urls(self, show_id: str, episode_no: str, mode: str = "sub") -> List[Dict[str, str]]:
+    async def get_stream_urls(self, show_id: str, episode_no: str, mode: str = "sub", show_name: str = None) -> List[Dict[str, str]]:
+        # Handle hashed IDs
+        if show_id.startswith("allanime-") and show_name:
+            results = await self.search(show_name, mode=mode)
+            if results:
+                show_id = results[0]['_id']
+
         episode_embed_gql = """
         query ($showId: String!, $translationType: VaildTranslationTypeEnumType!, $episodeString: String!) {
             episode( showId: $showId translationType: $translationType episodeString: $episodeString ) {
@@ -279,11 +293,12 @@ if __name__ == "__main__":
     # Quick test
     async def main():
         scraper = AniScraper()
-        print("Searching for Jujutsu Kaisen...")
-        results = await scraper.search("Jujutsu Kaisen")
+        print("Searching for Gintama...")
+        results = await scraper.search("gintama")
         for res in results:
             print(f"{res['_id']}: {res['name']} ({res.get('availableEpisodes', {}).get('sub', 0)} eps)")
-            
+        
+        """    
         if results:
             show_id = results[0]['_id']
             print(f"\nGetting episodes for {results[0]['name']}...")
@@ -295,5 +310,5 @@ if __name__ == "__main__":
                 links = await scraper.get_stream_urls(show_id, eps[-1])
                 for link in links:
                     print(f"[{link['quality']}] {link['source']}: {link['url'][:50]}...")
-
+        """
     asyncio.run(main())

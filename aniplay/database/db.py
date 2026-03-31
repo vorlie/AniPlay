@@ -18,7 +18,7 @@ import aiosqlite
 #import sqlite3
 from typing import List, Optional, Any  # noqa: F401
 from datetime import datetime
-from .models import Series, Episode, WatchProgress, MediaTrack, OnlineProgress, DownloadTaskState
+from .models import Series, Episode, WatchProgress, MediaTrack, OnlineProgress, DownloadTaskState, PlannerEntry
 from ..config import DB_PATH
 from ..utils.logger import get_logger
 
@@ -98,11 +98,13 @@ class DatabaseManager:
                     show_id TEXT NOT NULL,
                     show_name TEXT NOT NULL,
                     episode_number INTEGER NOT NULL,
-                    timestamp REAL DEFAULT 0.0,
+                    timestamp REAL DEFAULT 0,
                     thumbnail_url TEXT,
                     local_path TEXT,
-                    completed INTEGER DEFAULT 0,
-                    last_watched DATETIME,
+                    completed BOOLEAN DEFAULT 0,
+                    last_watched TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    allmanga_id TEXT,
+                    nyaa_query TEXT,
                     UNIQUE(show_id, episode_number)
                 )
             """)
@@ -121,6 +123,18 @@ class DatabaseManager:
                     referrer TEXT,
                     metadata_json TEXT DEFAULT '{}',
                     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Planner table
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS planner (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    show_id TEXT,
+                    show_name TEXT NOT NULL,
+                    status TEXT DEFAULT 'Plan to Watch',
+                    notes TEXT,
+                    date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             async with db.execute("PRAGMA table_info(episodes)") as cursor:
@@ -146,6 +160,17 @@ class DatabaseManager:
                     await db.execute("ALTER TABLE online_progress ADD COLUMN timestamp REAL DEFAULT 0.0")
                 if 'thumbnail_url' not in columns:
                     await db.execute("ALTER TABLE online_progress ADD COLUMN thumbnail_url TEXT")
+                # Migration: Add allmanga_id to online_progress if it doesn't exist
+                try:
+                    await db.execute("ALTER TABLE online_progress ADD COLUMN allmanga_id TEXT")
+                    logger.info("Database: Added allmanga_id column to online_progress")
+                except Exception:
+                    pass # Column already exists
+                try:
+                    await db.execute("ALTER TABLE online_progress ADD COLUMN nyaa_query TEXT")
+                    logger.info("Database: Added nyaa_query column to online_progress")
+                except Exception:
+                    pass # Column already exists
                 if 'local_path' not in columns:
                     await db.execute("ALTER TABLE online_progress ADD COLUMN local_path TEXT")
             
@@ -475,16 +500,17 @@ class DatabaseManager:
     async def update_online_progress(self, progress: OnlineProgress):
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                """INSERT INTO online_progress (show_id, show_name, episode_number, timestamp, thumbnail_url, local_path, completed, last_watched)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """INSERT INTO online_progress (show_id, show_name, episode_number, timestamp, thumbnail_url, local_path, completed, allmanga_id, nyaa_query)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(show_id, episode_number) DO UPDATE SET
-                   show_name = excluded.show_name,
                    timestamp = excluded.timestamp,
-                   thumbnail_url = COALESCE(excluded.thumbnail_url, online_progress.thumbnail_url),
-                   local_path = COALESCE(excluded.local_path, online_progress.local_path),
+                   thumbnail_url = excluded.thumbnail_url,
+                   local_path = excluded.local_path,
                    completed = excluded.completed,
-                   last_watched = excluded.last_watched""",
-                (progress.show_id, progress.show_name, progress.episode_number, progress.timestamp, progress.thumbnail_url, progress.local_path, int(progress.completed), datetime.now())
+                   allmanga_id = COALESCE(excluded.allmanga_id, online_progress.allmanga_id),
+                   nyaa_query = COALESCE(excluded.nyaa_query, online_progress.nyaa_query)""",
+                (progress.show_id, progress.show_name, progress.episode_number, progress.timestamp, 
+                 progress.thumbnail_url, progress.local_path, int(progress.completed), progress.allmanga_id, progress.nyaa_query)
             )
             await db.commit()
 
@@ -497,12 +523,14 @@ class DatabaseManager:
                     id=row['id'],
                     show_id=row['show_id'],
                     show_name=row['show_name'],
-                    episode_number=row['episode_number'],
-                    timestamp=row['timestamp'],
+                    episode_number=int(row['episode_number']) if row['episode_number'] is not None else 0,
+                    timestamp=float(row['timestamp']) if row['timestamp'] is not None else 0.0,
                     thumbnail_url=row['thumbnail_url'],
                     local_path=row['local_path'],
                     completed=bool(row['completed']),
-                    last_watched=datetime.fromisoformat(row['last_watched']) if isinstance(row['last_watched'], str) else row['last_watched']
+                    last_watched=datetime.fromisoformat(row['last_watched']) if isinstance(row['last_watched'], str) else row['last_watched'],
+                    allmanga_id=row['allmanga_id'] if 'allmanga_id' in row.keys() else None,
+                    nyaa_query=row['nyaa_query'] if 'nyaa_query' in row.keys() else None
                 ) for row in rows]
 
     async def get_recent_online_shows(self, limit: int = 20) -> List[dict]:
@@ -511,7 +539,7 @@ class DatabaseManager:
             # Get unique show_id/show_name pairs ordered by most recent last_watched
             # Using GROUP BY and MAX(last_watched)
             query = """
-                SELECT show_id, show_name, thumbnail_url, MAX(last_watched) as latest
+                SELECT show_id, show_name, thumbnail_url, MAX(allmanga_id) as allmanga_id, MAX(nyaa_query) as nyaa_query, MAX(last_watched) as latest
                 FROM online_progress
                 GROUP BY show_id
                 ORDER BY latest DESC
@@ -519,19 +547,65 @@ class DatabaseManager:
             """
             async with db.execute(query, (limit,)) as cursor:
                 rows = await cursor.fetchall()
-                return [{"show_id": r["show_id"], "show_name": r["show_name"], "thumbnail_url": r["thumbnail_url"]} for r in rows]
+                return [{"show_id": r["show_id"], "show_name": r["show_name"], "thumbnail_url": r["thumbnail_url"], "allmanga_id": r["allmanga_id"], "nyaa_query": r["nyaa_query"]} for r in rows]
     async def get_downloaded_online_shows(self) -> List[dict]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             query = """
-                SELECT DISTINCT show_id, show_name, thumbnail_url
+                SELECT show_id, show_name, thumbnail_url, MAX(allmanga_id) as allmanga_id, MAX(nyaa_query) as nyaa_query
                 FROM online_progress
                 WHERE local_path IS NOT NULL AND local_path != ''
+                GROUP BY show_id
                 ORDER BY show_name ASC
             """
             async with db.execute(query) as cursor:
                 rows = await cursor.fetchall()
-                return [{"show_id": r["show_id"], "show_name": r["show_name"], "thumbnail_url": r["thumbnail_url"]} for r in rows]
+                return [{"show_id": r["show_id"], "show_name": r["show_name"], "thumbnail_url": r["thumbnail_url"], "allmanga_id": r["allmanga_id"], "nyaa_query": r["nyaa_query"]} for r in rows]
+
+    async def migrate_online_show(self, old_id: str, new_id: str, show_name: str, allmanga_id: str = None):
+        """Migrates online progress entries from an old ID to a new canonical ID."""
+        logger.info(f"Database: Migrating online progress {old_id} -> {new_id} ({show_name})")
+        async with aiosqlite.connect(self.db_path) as db:
+            # To avoid unique constraint conflicts, delete duplicates from old_id side
+            await db.execute("""
+                DELETE FROM online_progress 
+                WHERE show_id = ? AND episode_number IN (
+                    SELECT episode_number FROM online_progress WHERE show_id = ?
+                )
+            """, (old_id, new_id))
+            
+            # Update entries that match old_id
+            if allmanga_id:
+                await db.execute(
+                    "UPDATE online_progress SET show_id = ?, show_name = ?, allmanga_id = ? WHERE show_id = ?",
+                    (new_id, show_name, allmanga_id, old_id)
+                )
+            else:
+                await db.execute(
+                    "UPDATE online_progress SET show_id = ?, show_name = ? WHERE show_id = ?",
+                    (new_id, show_name, old_id)
+                )
+            
+            # Also update any entries that match the show_name but have a different ID
+            # (Handles name-based IDs from previous versions)
+            await db.execute("""
+                DELETE FROM online_progress 
+                WHERE show_name = ? AND show_id != ? AND episode_number IN (
+                    SELECT episode_number FROM online_progress WHERE show_id = ?
+                )
+            """, (show_name, new_id, new_id))
+            
+            if allmanga_id:
+                await db.execute(
+                    "UPDATE online_progress SET show_id = ?, allmanga_id = ? WHERE show_name = ? AND show_id != ?",
+                    (new_id, allmanga_id, show_name, new_id)
+                )
+            else:
+                await db.execute(
+                    "UPDATE online_progress SET show_id = ? WHERE show_name = ? AND show_id != ?",
+                    (new_id, show_name, new_id)
+                )
+            await db.commit()
 
     # Download Task Operations
 
@@ -578,4 +652,42 @@ class DatabaseManager:
     async def clear_download_history(self):
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("DELETE FROM download_tasks WHERE status IN ('Finished', 'Failed', 'Cancelled')")
+            await db.commit()
+
+    # Planner Operations
+
+    async def add_planner_entry(self, entry: PlannerEntry) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "INSERT INTO planner (show_id, show_name, status, notes) VALUES (?, ?, ?, ?)",
+                (entry.show_id, entry.show_name, entry.status, entry.notes)
+            )
+            await db.commit()
+            return cursor.lastrowid
+
+    async def get_all_planner_entries(self) -> List[PlannerEntry]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM planner ORDER BY date_added DESC") as cursor:
+                rows = await cursor.fetchall()
+                return [PlannerEntry(
+                    id=row['id'],
+                    show_id=row['show_id'],
+                    show_name=row['show_name'],
+                    status=row['status'],
+                    notes=row['notes'],
+                    date_added=datetime.fromisoformat(row['date_added']) if isinstance(row['date_added'], str) else row['date_added']
+                ) for row in rows]
+
+    async def update_planner_entry(self, entry: PlannerEntry):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE planner SET show_id = ?, show_name = ?, status = ?, notes = ? WHERE id = ?",
+                (entry.show_id, entry.show_name, entry.status, entry.notes, entry.id)
+            )
+            await db.commit()
+
+    async def remove_planner_entry(self, entry_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM planner WHERE id = ?", (entry_id,))
             await db.commit()

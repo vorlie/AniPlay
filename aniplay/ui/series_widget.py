@@ -16,38 +16,40 @@
 
 import os
 import qasync
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QListWidget, QListWidgetItem, QLabel, QHBoxLayout, QFrame, QLineEdit, QMenu
-from PyQt6.QtCore import pyqtSignal, Qt, QSize
-from PyQt6.QtGui import QPixmap, QImage, QPainter, QPainterPath, QColor, QBrush
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QLabel, QHBoxLayout, 
+    QFrame, QLineEdit, QMenu, QScrollArea, QGridLayout
+)
+from PyQt6.QtCore import pyqtSignal, Qt, QSize, QEvent
+from PyQt6.QtGui import QPixmap, QPainter, QPainterPath, QColor
 from ..database.models import Series
 from .selection_info_widget import SelectionInfoWidget
 
 class SeriesCard(QFrame):
+    clicked = pyqtSignal(object) # Series
+
     def __init__(self, series: Series, parent=None):
         super().__init__(parent)
         self.series = series
-        self.setFixedSize(180, 260) # Portrait aspect ratio for posters
+        self.setFixedSize(180, 260)
         self.setObjectName("SeriesCard")
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setStyleSheet("""
             #SeriesCard {
-                border-radius: 12px;
-                background-color: rgba(255, 255, 255, 0.02);
-            }
-            #SeriesCard:hover {
-                border: 2px solid #3d5afe;
-                background-color: rgba(61, 90, 254, 0.1);
+                background-color: transparent;
+                border: none;
             }
         """)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
         
-        # Poster Container (takes most of the card)
+        # Poster Container
         self.poster_label = QLabel()
         self.poster_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.poster_label.setStyleSheet("border-radius: 12px;")
+        self.poster_label.setStyleSheet("background-color: #1a1a1a; border-radius: 10px;")
         
         # Title Overlay
         self.overlay = QFrame(self.poster_label)
@@ -59,8 +61,8 @@ class SeriesCard(QFrame):
         self.overlay.setGeometry(0, 150, 180, 110) # Larger overlay area
         self.overlay.setStyleSheet("""
             background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(0,0,0,0), stop:1 rgba(0,0,0,220));
-            border-bottom-left-radius: 12px;
-            border-bottom-right-radius: 12px;
+            border-bottom-left-radius: 10px;
+            border-bottom-right-radius: 10px;
         """)
         
         self.name_label = QLabel(series.name)
@@ -69,23 +71,36 @@ class SeriesCard(QFrame):
         self.name_label.setStyleSheet("color: white; font-weight: bold; font-size: 13px; background: transparent; border: none;")
         self.overlay_layout.addWidget(self.name_label)
         
-        self._set_rounded_poster(series.thumbnail_path)
+        self._set_poster(series.thumbnail_path)
         self.main_layout.addWidget(self.poster_label)
 
-    def _set_rounded_poster(self, path):
-        radius = 12
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.series)
+        super().mousePressEvent(event)
+
+    def _set_poster(self, path):
+        radius = 10
         if path and os.path.exists(path):
             pixmap = QPixmap(path)
             if not pixmap.isNull():
-                # Scale first
+                # Scale to card size
                 scaled = pixmap.scaled(
                     180, 260, 
                     Qt.AspectRatioMode.KeepAspectRatioByExpanding, 
                     Qt.TransformationMode.SmoothTransformation
                 )
                 
-                # Create rounded version
-                rounded = QPixmap(scaled.size())
+                # Crop to fit precisely 180x260 if needed
+                if scaled.width() > 180 or scaled.height() > 260:
+                    scaled = scaled.copy(
+                        (scaled.width() - 180) // 2,
+                        (scaled.height() - 260) // 2,
+                        180, 260
+                    )
+
+                # Create rounded pixmap
+                rounded = QPixmap(180, 260)
                 rounded.fill(QColor(0, 0, 0, 0))
                 
                 painter = QPainter(rounded)
@@ -93,7 +108,7 @@ class SeriesCard(QFrame):
                 painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
                 
                 path = QPainterPath()
-                path.addRoundedRect(0, 0, scaled.width(), scaled.height(), radius, radius)
+                path.addRoundedRect(0, 0, 180, 260, radius, radius)
                 painter.setClipPath(path)
                 painter.drawPixmap(0, 0, scaled)
                 painter.end()
@@ -103,7 +118,7 @@ class SeriesCard(QFrame):
         
         # Fallback for missing poster
         self.poster_label.setText("🎞️")
-        self.poster_label.setStyleSheet(f"font-size: 40px; border-radius: {radius}px; background-color: #2a2a2a;")
+        self.poster_label.setStyleSheet(f"font-size: 40px; border-radius: {radius}px; background-color: #1a1a1a;")
 
 class SeriesWidget(QWidget):
     series_selected = pyqtSignal(Series)
@@ -113,125 +128,108 @@ class SeriesWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setContentsMargins(20, 20, 20, 20)
+        self.layout.setSpacing(12)
         
         self.header = QLabel("Your Library")
-        self.header.setStyleSheet("""
-            font-size: 24px; 
-            font-weight: bold; 
-            margin: 10px 0px 15px 0px;
-            color: rgba(255, 255, 255, 0.9);
-        """)
+        self.header.setStyleSheet("font-size: 16pt; font-weight: bold; color: #fff; margin-bottom: 5px;")
         self.layout.addWidget(self.header)
 
         self.search_bar = QLineEdit()
-        self.search_bar.setPlaceholderText("🔍 Search series...")
-        self.search_bar.setStyleSheet("""
-            QLineEdit {
-                border-radius: 10px;
-                padding: 12px 18px;
-                font-size: 14px;
-                margin-bottom: 15px;
-                background-color: rgba(255, 255, 255, 0.05);
-                border: 1px solid rgba(255, 255, 255, 0.1);
-            }
-            QLineEdit:focus {
-                border: 1px solid #3d5afe;
-                background-color: rgba(255, 255, 255, 0.08);
-            }
-        """)
+        self.search_bar.setPlaceholderText("🔍 Search your library...")
         self.search_bar.textChanged.connect(self._filter_series)
         self.layout.addWidget(self.search_bar)
-
-        self.selection_info = SelectionInfoWidget()
-        self.layout.addWidget(self.selection_info)
         
-        self.list_widget = QListWidget()
-        self.list_widget.setViewMode(QListWidget.ViewMode.IconMode)
-        self.list_widget.setResizeMode(QListWidget.ResizeMode.Adjust)
-        self.list_widget.setSpacing(18)
-        self.list_widget.setMovement(QListWidget.Movement.Static)
-        self.list_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.list_widget.customContextMenuRequested.connect(self._show_context_menu)
-        self.list_widget.setStyleSheet("""
-            QListWidget {
-                background-color: transparent;
-                border: none;
-            }
-            QListWidget::item {
-                border-radius: 10px;
-            }
-            QListWidget::item:selected {
-                background-color: transparent;
-            }
-        """)
-        self.list_widget.itemClicked.connect(self._on_item_clicked)
-        self.layout.addWidget(self.list_widget)
+        # Grid Scroll Area
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll_area.setStyleSheet("background: transparent;")
         
-        self.series_map = {} # id -> Series object
+        self.grid_container = QWidget()
+        self.grid_container.setStyleSheet("background: transparent;")
+        self.grid_layout = QGridLayout(self.grid_container)
+        self.grid_layout.setContentsMargins(5, 5, 5, 5)
+        self.grid_layout.setSpacing(25)
+        self.grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        
+        self.scroll_area.setWidget(self.grid_container)
+        self.layout.addWidget(self.scroll_area)
+        
+        self.series_widgets = [] # Store widgets to filter
+        self.series_map = {}
 
     def set_series(self, series_list: list[Series]):
-        self.list_widget.clear()
+        # Clear current grid
+        while self.grid_layout.count():
+            item = self.grid_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        self.series_widgets = []
         self.series_map = {}
-        for s in series_list:
-            item = QListWidgetItem()
-            item.setData(Qt.ItemDataRole.UserRole, s.id)
-            item.setSizeHint(QSize(180, 260))
-            self.list_widget.addItem(item)
-            
+        
+        # Add cards to grid
+        cols = self._calculate_columns()
+        for i, s in enumerate(series_list):
             card = SeriesCard(s)
-            self.list_widget.setItemWidget(item, card)
+            card.clicked.connect(self._on_card_clicked)
+            card.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            card.customContextMenuRequested.connect(lambda pos, c=card: self._show_context_menu(pos, c))
+            
+            row = i // cols
+            col = i % cols
+            self.grid_layout.addWidget(card, row, col)
+            self.series_widgets.append(card)
             self.series_map[s.id] = s
 
-    @qasync.asyncSlot(QListWidgetItem)
-    async def _on_item_clicked(self, item):
-        series_id = item.data(Qt.ItemDataRole.UserRole)
-        if series_id in self.series_map:
-            series = self.series_map[series_id]
-            self.series_selected.emit(series)
-            
-            # Update selection info (we might need episode count from parent/db)
-            # For now, we'll emit the signal and let MainWindow handle it or 
-            # we can try to get more info if series object has it.
-            # actually, let's let MainWindow handle updating this widget since it has DB access
-            # or we can pass a callback/method.
-            # For now, just show name and size from series object
-            self.selection_info.update_info(series.name, 0, series.size_bytes)
-            # MainWindow will update episode count later via a separate call if needed
-            # but wait, MainWindow is the one that receives the signal.
-            # Let's just update as much as we can here.
+    def _calculate_columns(self):
+        # Account for margins and generous spacing
+        width = self.scroll_area.width()
+        card_width = 195 # 180 + 15 min padding
+        return max(1, width // card_width)
+
+    def _on_card_clicked(self, series):
+        self.series_selected.emit(series)
 
     def _filter_series(self, text):
         search_text = text.lower()
-        for i in range(self.list_widget.count()):
-            item = self.list_widget.item(i)
-            series_id = item.data(Qt.ItemDataRole.UserRole)
-            series = self.series_map.get(series_id)
-            if series:
-                item.setHidden(search_text not in series.name.lower())
+        visible_items = []
+        
+        for card in self.series_widgets:
+            is_visible = search_text in card.series.name.lower()
+            card.setVisible(is_visible)
+            if is_visible:
+                visible_items.append(card)
+        
+        # Relayout visible items
+        cols = self._calculate_columns()
+        for i, card in enumerate(visible_items):
+            row = i // cols
+            col = i % cols
+            self.grid_layout.addWidget(card, row, col)
 
-    def _show_context_menu(self, pos):
-        item = self.list_widget.itemAt(pos)
-        if not item:
-            return
-            
-        series_id = item.data(Qt.ItemDataRole.UserRole)
-        series = self.series_map.get(series_id)
+    def _show_context_menu(self, pos, card):
+        series = card.series
         if not series:
             return
             
         menu = QMenu(self)
-        menu.setStyleSheet("")
         
         mark_all_watched = menu.addAction("Mark All as Watched")
         mark_all_unwatched = menu.addAction("Clear Progress for All")
         menu.addSeparator()
         change_poster = menu.addAction("🖼️ Change Poster Manually")
         
-        action = menu.exec(self.list_widget.mapToGlobal(pos))
+        action = menu.exec(card.mapToGlobal(pos))
         if action == mark_all_watched:
             self.series_watched_toggled.emit(series, True)
         elif action == mark_all_unwatched:
             self.series_watched_toggled.emit(series, False)
         elif action == change_poster:
             self.poster_change_requested.emit(series)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # Update layout since columns might change
+        self._filter_series(self.search_bar.text())
