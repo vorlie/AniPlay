@@ -18,7 +18,10 @@ import httpx
 import json
 import re
 import asyncio
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
+from ..utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 class AniScraper:
     def __init__(self):
@@ -189,7 +192,7 @@ class AniScraper:
                                     # Example: repackager.wixmp.com/...,720,480,360,.mp4.urlset
                                     match = re.search(r'/,([\d,]+),/', url)
                                     if match:
-                                        base_url = url.replace(f", {match.group(1)},", "")
+                                        #base_url = url.replace(f", {match.group(1)},", "")
                                         for q in match.group(1).split(','):
                                             if q:
                                                 raw_links.append({
@@ -222,7 +225,8 @@ class AniScraper:
                                                 if not stream_url.startswith("http"):
                                                     stream_url = re.sub(r'/[^/]*$', '/', hls_url) + stream_url
                                                 raw_links.append({"url": stream_url, "quality": res})
-                                    except:
+                                    except Exception as e:
+                                        logger.error(f"Error fetching HLS links for {source_name}: {e}")
                                         raw_links.append({"url": hls_url, "quality": "HLS"})
                                 else:
                                     raw_links.append({"url": hls_url, "quality": "HLS"})

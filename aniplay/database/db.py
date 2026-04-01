@@ -15,6 +15,8 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import aiosqlite
+# stdlib
+import json
 #import sqlite3
 from typing import List, Optional, Any  # noqa: F401
 from datetime import datetime
@@ -126,7 +128,7 @@ class DatabaseManager:
                 )
             """)
             
-            # Planner table
+            # Planner table (include optional AniList enrichment columns)
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS planner (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,7 +136,17 @@ class DatabaseManager:
                     show_name TEXT NOT NULL,
                     status TEXT DEFAULT 'Plan to Watch',
                     notes TEXT,
-                    date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    anilist_id INTEGER,
+                    cover_url TEXT,
+                    display_title TEXT,
+                    genres TEXT,
+                    description TEXT,
+                    episodes INTEGER,
+                    average_score REAL,
+                    next_episode INTEGER,
+                    next_episode_airing INTEGER,
+                    last_synced TIMESTAMP
                 )
             """)
             async with db.execute("PRAGMA table_info(episodes)") as cursor:
@@ -173,7 +185,62 @@ class DatabaseManager:
                     pass # Column already exists
                 if 'local_path' not in columns:
                     await db.execute("ALTER TABLE online_progress ADD COLUMN local_path TEXT")
-            
+
+            # Migration: ensure planner has AniList enrichment columns
+            async with db.execute("PRAGMA table_info(planner)") as cursor:
+                pcols = [row[1] for row in await cursor.fetchall()]
+                if 'anilist_id' not in pcols:
+                    try:
+                        await db.execute("ALTER TABLE planner ADD COLUMN anilist_id INTEGER")
+                    except Exception:
+                        pass
+                if 'cover_url' not in pcols:
+                    try:
+                        await db.execute("ALTER TABLE planner ADD COLUMN cover_url TEXT")
+                    except Exception:
+                        pass
+                if 'episodes' not in pcols:
+                    try:
+                        await db.execute("ALTER TABLE planner ADD COLUMN episodes INTEGER")
+                    except Exception:
+                        pass
+                if 'average_score' not in pcols:
+                    try:
+                        await db.execute("ALTER TABLE planner ADD COLUMN average_score REAL")
+                    except Exception:
+                        pass
+                if 'next_episode' not in pcols:
+                    try:
+                        await db.execute("ALTER TABLE planner ADD COLUMN next_episode INTEGER")
+                    except Exception:
+                        pass
+                if 'next_episode_airing' not in pcols:
+                    try:
+                        await db.execute("ALTER TABLE planner ADD COLUMN next_episode_airing INTEGER")
+                    except Exception:
+                        pass
+                if 'last_synced' not in pcols:
+                    try:
+                        await db.execute("ALTER TABLE planner ADD COLUMN last_synced TIMESTAMP")
+                    except Exception:
+                        pass
+                # New fields persisted from AniList
+                if 'display_title' not in pcols:
+                    try:
+                        await db.execute("ALTER TABLE planner ADD COLUMN display_title TEXT")
+                    except Exception:
+                        pass
+                if 'genres' not in pcols:
+                    try:
+                        await db.execute("ALTER TABLE planner ADD COLUMN genres TEXT")
+                    except Exception:
+                        pass
+                if 'description' not in pcols:
+                    try:
+                        await db.execute("ALTER TABLE planner ADD COLUMN description TEXT")
+                    except Exception:
+                        pass
+
             await db.commit()
 
     # Series Operations
@@ -658,9 +725,25 @@ class DatabaseManager:
 
     async def add_planner_entry(self, entry: PlannerEntry) -> int:
         async with aiosqlite.connect(self.db_path) as db:
+            genres_text = json.dumps(entry.genres or [])
             cursor = await db.execute(
-                "INSERT INTO planner (show_id, show_name, status, notes) VALUES (?, ?, ?, ?)",
-                (entry.show_id, entry.show_name, entry.status, entry.notes)
+                "INSERT INTO planner (show_id, show_name, status, notes, anilist_id, cover_url, display_title, genres, description, episodes, average_score, next_episode, next_episode_airing, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    entry.show_id,
+                    entry.show_name,
+                    entry.status,
+                    entry.notes,
+                    entry.anilist_id,
+                    entry.cover_url,
+                    entry.display_title,
+                    genres_text,
+                    entry.description,
+                    entry.episodes,
+                    entry.average_score,
+                    entry.next_episode,
+                    entry.next_episode_airing,
+                    entry.last_synced
+                )
             )
             await db.commit()
             return cursor.lastrowid
@@ -670,20 +753,66 @@ class DatabaseManager:
             db.row_factory = aiosqlite.Row
             async with db.execute("SELECT * FROM planner ORDER BY date_added DESC") as cursor:
                 rows = await cursor.fetchall()
-                return [PlannerEntry(
-                    id=row['id'],
-                    show_id=row['show_id'],
-                    show_name=row['show_name'],
-                    status=row['status'],
-                    notes=row['notes'],
-                    date_added=datetime.fromisoformat(row['date_added']) if isinstance(row['date_added'], str) else row['date_added']
-                ) for row in rows]
+                results = []
+                for row in rows:
+                    anilist_id = row['anilist_id'] if 'anilist_id' in row.keys() else None
+                    cover_url = row['cover_url'] if 'cover_url' in row.keys() else None
+                    episodes = row['episodes'] if 'episodes' in row.keys() else None
+                    average_score = row['average_score'] if 'average_score' in row.keys() else None
+                    next_episode = row['next_episode'] if 'next_episode' in row.keys() else None
+                    next_episode_airing = row['next_episode_airing'] if 'next_episode_airing' in row.keys() else None
+                    last_synced = None
+                    if 'last_synced' in row.keys() and row['last_synced']:
+                        last_synced = datetime.fromisoformat(row['last_synced']) if isinstance(row['last_synced'], str) else row['last_synced']
+
+                    # parse persisted genres JSON if present
+                    try:
+                        g = json.loads(row['genres']) if ('genres' in row.keys() and row['genres']) else []
+                    except Exception:
+                        g = []
+
+                    results.append(PlannerEntry(
+                        id=row['id'],
+                        show_id=row['show_id'],
+                        show_name=row['show_name'],
+                        status=row['status'],
+                        notes=row['notes'],
+                        date_added=datetime.fromisoformat(row['date_added']) if isinstance(row['date_added'], str) else row['date_added'],
+                        anilist_id=anilist_id,
+                        cover_url=cover_url,
+                        episodes=episodes,
+                        average_score=average_score,
+                        next_episode=next_episode,
+                        next_episode_airing=next_episode_airing,
+                        last_synced=last_synced,
+                        display_title=row['display_title'] if 'display_title' in row.keys() else None,
+                        genres=g,
+                        description=row['description'] if 'description' in row.keys() else None
+                    ))
+                return results
 
     async def update_planner_entry(self, entry: PlannerEntry):
         async with aiosqlite.connect(self.db_path) as db:
+            genres_text = json.dumps(entry.genres or [])
             await db.execute(
-                "UPDATE planner SET show_id = ?, show_name = ?, status = ?, notes = ? WHERE id = ?",
-                (entry.show_id, entry.show_name, entry.status, entry.notes, entry.id)
+                "UPDATE planner SET show_id = ?, show_name = ?, status = ?, notes = ?, anilist_id = ?, cover_url = ?, display_title = ?, genres = ?, description = ?, episodes = ?, average_score = ?, next_episode = ?, next_episode_airing = ?, last_synced = ? WHERE id = ?",
+                (
+                    entry.show_id,
+                    entry.show_name,
+                    entry.status,
+                    entry.notes,
+                    entry.anilist_id,
+                    entry.cover_url,
+                    entry.display_title,
+                    genres_text,
+                    entry.description,
+                    entry.episodes,
+                    entry.average_score,
+                    entry.next_episode,
+                    entry.next_episode_airing,
+                    entry.last_synced,
+                    entry.id
+                )
             )
             await db.commit()
 

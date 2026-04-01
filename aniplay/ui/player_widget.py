@@ -20,8 +20,8 @@ import time
 import base64
 import urllib.request
 import re
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QLabel, QHBoxLayout
-from PyQt6.QtCore import pyqtSignal, QTimer, Qt
+from PyQt6.QtWidgets import QWidget, QLabel, QHBoxLayout
+from PyQt6.QtCore import pyqtSignal, QTimer
 import mpv
 
 from .vlc_window import VlcPlayerWindow

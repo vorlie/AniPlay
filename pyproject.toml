@@ -20,6 +20,7 @@ dependencies = [
     "pyqtdarktheme",
     "httpx>=0.28.0",
     "python-dotenv>=1.0.1",
+    "respx>=0.22.0",
 ]
 
 [tool.uv.sources]

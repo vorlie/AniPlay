@@ -98,3 +98,15 @@ class PlannerEntry:
     status: str = "Plan to Watch"
     notes: str = ""
     date_added: datetime = field(default_factory=datetime.now)
+    # AniList enrichment fields (optional, non-breaking)
+    anilist_id: Optional[int] = None
+    cover_url: Optional[str] = None
+    episodes: Optional[int] = None
+    average_score: Optional[float] = None
+    next_episode: Optional[int] = None
+    next_episode_airing: Optional[int] = None
+    last_synced: Optional[datetime] = None
+    # Optional display fields persisted from AniList
+    display_title: Optional[str] = None
+    genres: List[str] = field(default_factory=list)
+    description: Optional[str] = None
