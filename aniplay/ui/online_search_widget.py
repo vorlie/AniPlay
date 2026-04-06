@@ -1050,29 +1050,28 @@ class OnlineSearchWidget(QWidget):
                 "thumbnail_url": data.get('thumbnail_url')
             }, timestamp=start_time))
 
-        # 2. Check for local cache (DB preferred, then safe_name)
+        # 2. Check for local cache (data payload / current progress / downloader path)
         local_path = None
-        if self._current_episode_progress and self._current_episode_progress.local_path:
+
+        data_local = data.get('local_path')
+        if data_local and os.path.exists(data_local):
+            local_path = data_local
+
+        if not local_path and self._current_episode_progress and self._current_episode_progress.local_path:
             if os.path.exists(self._current_episode_progress.local_path):
                 local_path = self._current_episode_progress.local_path
-        
+
         if not local_path and self.download_manager:
             safe_name = f"{show_name} - Ep {ep_no}".replace("/", "_").replace("\\", "_").replace(":", "_")
             local_path = self.download_manager.get_local_path(safe_name, data.get('show_id'), ep_no=ep_no)
-            
-        if local_path:
+
+        if local_path and os.path.exists(local_path):
             logger.info(f"Using cached file: {local_path}")
             self.status_label.setText(f"Playing {title} from cache...")
             if self.player_widget:
-                # We could add a callback here if load_video failed, but usually file exists check is enough
                 self.player_widget.load_video(local_path, start_time=start_time)
                 self.player_widget.info_label.setText(f"Cached: {title}")
-                
-                # Fallback check: if it's a tiny file (corrupt download), we might want to stream instead
-                if os.path.getsize(local_path) < 1024 * 1024: # < 1MB
-                    logger.warning(f"Cached file too small ({os.path.getsize(local_path)} bytes), falling back to stream")
-                else:
-                    return
+            return
 
         # 3. Stream if no cache
         if not url:
@@ -1086,7 +1085,7 @@ class OnlineSearchWidget(QWidget):
                 os.startfile(url)
             except Exception as e:
                 logger.error(f"Error opening magnet: {e}")
-                self.status_label.setText(f"Failed to open magnet. Please download it first.")
+                self.status_label.setText("Failed to open magnet. Please download it first.")
             return
 
         if self.player_choice.currentText() == "Internal Player" and self.player_widget:

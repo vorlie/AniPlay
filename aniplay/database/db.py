@@ -324,6 +324,14 @@ class DatabaseManager:
             )
             await db.commit()
 
+    async def update_series_metadata(self, series: Series):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE series SET name = ?, path = ?, thumbnail_path = ? WHERE id = ?",
+                (series.name, series.path, series.thumbnail_path, series.id)
+            )
+            await db.commit()
+
     # Episode Operations
 
     async def add_episode(self, episode: Episode) -> int:
@@ -450,6 +458,21 @@ class DatabaseManager:
             )
             await db.commit()
 
+    async def update_media_track(self, track: MediaTrack):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """UPDATE media_tracks SET 
+                   stream_index = ?, 
+                   track_type = ?, 
+                   codec = ?, 
+                   language = ?, 
+                   title = ?, 
+                   sub_index = ?
+                   WHERE id = ?""",
+                (track.index, track.type, track.codec, track.language, track.title, track.sub_index, track.id)
+            )
+            await db.commit()
+
     async def clear_episode_tracks(self, episode_id: int):
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("DELETE FROM media_tracks WHERE episode_id = ?", (episode_id,))
@@ -459,6 +482,22 @@ class DatabaseManager:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute("SELECT * FROM media_tracks WHERE episode_id = ?", (episode_id,)) as cursor:
+                rows = await cursor.fetchall()
+                return [MediaTrack(
+                    id=row['id'],
+                    episode_id=row['episode_id'],
+                    index=row['stream_index'],
+                    type=row['track_type'],
+                    codec=row['codec'],
+                    language=row['language'],
+                    title=row['title'],
+                    sub_index=row['sub_index']
+                ) for row in rows]
+
+    async def get_all_media_tracks(self) -> List[MediaTrack]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM media_tracks") as cursor:
                 rows = await cursor.fetchall()
                 return [MediaTrack(
                     id=row['id'],
@@ -600,6 +639,25 @@ class DatabaseManager:
                     nyaa_query=row['nyaa_query'] if 'nyaa_query' in row.keys() else None
                 ) for row in rows]
 
+    async def get_all_online_progress(self) -> List[OnlineProgress]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT * FROM online_progress ORDER BY last_watched DESC") as cursor:
+                rows = await cursor.fetchall()
+                return [OnlineProgress(
+                    id=row['id'],
+                    show_id=row['show_id'],
+                    show_name=row['show_name'],
+                    episode_number=int(row['episode_number']) if row['episode_number'] is not None else 0,
+                    timestamp=float(row['timestamp']) if row['timestamp'] is not None else 0.0,
+                    thumbnail_url=row['thumbnail_url'],
+                    local_path=row['local_path'],
+                    completed=bool(row['completed']),
+                    last_watched=datetime.fromisoformat(row['last_watched']) if isinstance(row['last_watched'], str) else row['last_watched'],
+                    allmanga_id=row['allmanga_id'] if 'allmanga_id' in row.keys() else None,
+                    nyaa_query=row['nyaa_query'] if 'nyaa_query' in row.keys() else None
+                ) for row in rows]
+
     async def get_recent_online_shows(self, limit: int = 20) -> List[dict]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -619,15 +677,51 @@ class DatabaseManager:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             query = """
-                SELECT show_id, show_name, thumbnail_url, MAX(allmanga_id) as allmanga_id, MAX(nyaa_query) as nyaa_query
+                SELECT show_id, show_name, thumbnail_url, MAX(allmanga_id) as allmanga_id, MAX(nyaa_query) as nyaa_query, MAX(local_path) as local_path
                 FROM online_progress
-                WHERE local_path IS NOT NULL AND local_path != ''
                 GROUP BY show_id
                 ORDER BY show_name ASC
             """
             async with db.execute(query) as cursor:
                 rows = await cursor.fetchall()
-                return [{"show_id": r["show_id"], "show_name": r["show_name"], "thumbnail_url": r["thumbnail_url"], "allmanga_id": r["allmanga_id"], "nyaa_query": r["nyaa_query"]} for r in rows]
+
+            results = []
+            from ..config import DOWNLOADS_PATH
+            import os
+
+            for r in rows:
+                show_id = r["show_id"]
+                local_path = r["local_path"]
+                has_local = bool(local_path and os.path.exists(local_path))
+
+                if not has_local:
+                    # Accept show as downloaded if folder exists by canonical naming
+                    candidate_dir = os.path.join(DOWNLOADS_PATH, show_id)
+                    if os.path.isdir(candidate_dir):
+                        has_local = True
+                    elif show_id.startswith("allanime-"):
+                        # Already canonical for allanime
+                        has_local = os.path.isdir(candidate_dir)
+                    elif show_id.startswith("nyaa-"):
+                        # Nyaa flexible folder style may include brackets
+                        if os.path.exists(DOWNLOADS_PATH):
+                            for d in os.listdir(DOWNLOADS_PATH):
+                                if d.endswith(f"[{show_id}]") or d == show_id:
+                                    has_local = True
+                                    break
+
+                if not has_local:
+                    continue
+
+                results.append({
+                    "show_id": show_id,
+                    "show_name": r["show_name"],
+                    "thumbnail_url": r["thumbnail_url"],
+                    "allmanga_id": r["allmanga_id"],
+                    "nyaa_query": r["nyaa_query"]
+                })
+
+            return results
 
     async def migrate_online_show(self, old_id: str, new_id: str, show_name: str, allmanga_id: str = None):
         """Migrates online progress entries from an old ID to a new canonical ID."""
@@ -671,6 +765,13 @@ class DatabaseManager:
                 await db.execute(
                     "UPDATE online_progress SET show_id = ? WHERE show_name = ? AND show_id != ?",
                     (new_id, show_name, new_id)
+                )
+
+            # Update local_path references to the new folder name (filesystem can be renamed during relink)
+            if old_id != new_id:
+                await db.execute(
+                    "UPDATE online_progress SET local_path = REPLACE(local_path, ?, ?) WHERE show_id = ? AND local_path IS NOT NULL AND local_path != ''",
+                    (old_id, new_id, new_id)
                 )
             await db.commit()
 
@@ -747,6 +848,37 @@ class DatabaseManager:
             )
             await db.commit()
             return cursor.lastrowid
+
+    async def update_planner_entry(self, entry: PlannerEntry):
+        async with aiosqlite.connect(self.db_path) as db:
+            genres_text = json.dumps(entry.genres or [])
+            await db.execute(
+                """UPDATE planner SET 
+                   show_id = ?, 
+                   show_name = ?, 
+                   status = ?, 
+                   notes = ?, 
+                   anilist_id = ?, 
+                   cover_url = ?, 
+                   display_title = ?, 
+                   genres = ?, 
+                   description = ?, 
+                   episodes = ?, 
+                   average_score = ?, 
+                   next_episode = ?, 
+                   next_episode_airing = ?, 
+                   last_synced = ?
+                   WHERE id = ?""",
+                (
+                    entry.show_id, entry.show_name, entry.status, entry.notes,
+                    entry.anilist_id, entry.cover_url, entry.display_title,
+                    genres_text, entry.description, entry.episodes,
+                    entry.average_score, entry.next_episode,
+                    entry.next_episode_airing, entry.last_synced,
+                    entry.id
+                )
+            )
+            await db.commit()
 
     async def get_all_planner_entries(self) -> List[PlannerEntry]:
         async with aiosqlite.connect(self.db_path) as db:

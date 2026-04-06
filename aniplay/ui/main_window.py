@@ -38,7 +38,7 @@ from ..database.db import DatabaseManager
 from ..database.models import WatchProgress
 from ..core.library_manager import LibraryManager
 from ..core.discord_manager import DiscordManager
-from .metadata_manager import MetadataManager
+from .database_browser import DatabaseBrowser
 from ..config import PREFERRED_PLAYER
 from ..utils.logger import get_logger
 
@@ -146,7 +146,7 @@ class MainWindow(QMainWindow):
         self.top_bar.addWidget(self.scan_btn)
         self.top_bar.addSpacing(10)
         
-        self.meta_btn = QPushButton("📝 Metadata")
+        self.meta_btn = QPushButton("🗄️ Database")
         self.meta_btn.setFixedHeight(40)
         self.meta_btn.setStyleSheet("""
             QPushButton {
@@ -156,7 +156,7 @@ class MainWindow(QMainWindow):
                 border-radius: 8px;
             }
         """)
-        self.meta_btn.clicked.connect(self.open_metadata_manager)
+        self.meta_btn.clicked.connect(self.open_database_browser)
         self.top_bar.addWidget(self.meta_btn)
         self.top_bar.addSpacing(15)
 
@@ -625,9 +625,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to execute mount script: {e}")
 
-    def open_metadata_manager(self):
-        self.meta_window = MetadataManager(self.db, self)
-        self.meta_window.show()
+    def open_database_browser(self):
+        self.db_window = DatabaseBrowser(self.db, self)
+        self.db_window.show()
 
     def on_download_progress(self, filename, progress, speed, eta, elapsed):
         # We don't need to show detailed progress in status bar anymore as we have a dedicated page

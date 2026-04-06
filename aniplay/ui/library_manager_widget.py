@@ -3,6 +3,7 @@
 
 import os
 import re
+import asyncio
 import hashlib
 import shutil
 from PyQt6.QtWidgets import (
@@ -84,9 +85,13 @@ class LibraryManagerWidget(QWidget):
         
         self.relink_btn = QPushButton("🔗 Relink Folder to DB")
         self.relink_btn.clicked.connect(self.relink_folder)
+
+        self.import_btn = QPushButton("📥 Import Downloads")
+        self.import_btn.clicked.connect(self.import_downloaded_shows)
         
         self.bottom_layout.addWidget(self.refresh_btn)
         self.bottom_layout.addStretch()
+        self.bottom_layout.addWidget(self.import_btn)
         self.bottom_layout.addWidget(self.relink_btn)
         
         self.layout.addLayout(self.bottom_layout)
@@ -209,9 +214,180 @@ class LibraryManagerWidget(QWidget):
             allmanga_id, ok3 = QInputDialog.getText(self, "Relink", "Original AllAnime ID (optional):")
         
         try:
+            from ..core.online_library_manager import OnlineLibraryManager
+
+            # Normalize target folder path for show_id and move if needed.
+            ol_manager = OnlineLibraryManager(DOWNLOADS_PATH, self.db)
+            if show_id.startswith("nyaa-"):
+                new_folder_name = show_id
+            elif show_id.startswith("allanime-"):
+                new_folder_name = show_id
+            else:
+                new_folder_name = ol_manager.get_allanime_folder_name(show_id)
+
+            new_folder_path = os.path.join(DOWNLOADS_PATH, new_folder_name)
+            if os.path.isdir(folder_path) and os.path.normpath(folder_path) != os.path.normpath(new_folder_path):
+                if os.path.isdir(new_folder_path):
+                    # Merge content into existing canonical folder
+                    for f in os.listdir(folder_path):
+                        src = os.path.join(folder_path, f)
+                        dst = os.path.join(new_folder_path, f)
+                        if not os.path.exists(dst):
+                            shutil.move(src, dst)
+                    try:
+                        os.rmdir(folder_path)
+                    except OSError:
+                        pass
+                else:
+                    shutil.move(folder_path, new_folder_path)
+
             if hasattr(self.db, "migrate_online_show"):
-                # We use the migrate method to update all entries for this folder
                 await self.db.migrate_online_show(folder_name, show_id, show_name, allmanga_id=allmanga_id)
                 QMessageBox.information(self, "Success", f"Folder {folder_name} relinked to {show_name} ({show_id})")
+
+            self.refresh_view()
+            parent_window = getattr(self, 'main_window', None) or self.parent()
+            if parent_window and hasattr(parent_window, 'online_widget'):
+                asyncio.create_task(parent_window.online_widget.load_recent())
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Relink failed: {e}")
+
+    @qasync.asyncSlot()
+    async def import_downloaded_shows(self):
+        from ..database.models import OnlineProgress
+        from ..config import VIDEO_EXTENSIONS
+
+        if not self.db:
+            QMessageBox.warning(self, "Error", "No database connection available.")
+            return
+
+        existing = await self.db.get_downloaded_online_shows()
+        existing_ids = {item['show_id'] for item in existing}
+
+        def extract_episode_number(filename: str):
+            patterns = [
+                r'[Ss](\d{1,2})[Ee](\d{1,3})',
+                r'[Ee]pisode[\s._-]?(\d{1,3})',
+                r'[Ee]p[\s._-]?(\d{1,3})',
+                r'\b(\d{1,3})\b'
+            ]
+            for pat in patterns:
+                match = re.search(pat, filename)
+                if match:
+                    try:
+                        return int(match.group(2) if len(match.groups()) > 1 else match.group(1))
+                    except Exception:
+                        continue
+            return 0
+
+        def extract_show_name_from_filename(path: str):
+            name = os.path.basename(path)
+            patterns = [
+                r'^(?P<name>.+?)\s*[-_]\s*[Ss]\d{1,2}[Ee]\d{1,3}',
+                r'^(?P<name>.+?)\s*[-_]\s*[Ee]p\d{1,3}',
+                r'^(?P<name>.+?)\s*[-_]\s*\d{1,3}',
+            ]
+            for pat in patterns:
+                m = re.search(pat, name, re.IGNORECASE)
+                if m and m.group('name').strip():
+                    return m.group('name').strip()
+            return None
+
+        imported_shows = 0
+        imported_episodes = 0
+
+        for folder_name in os.listdir(DOWNLOADS_PATH):
+            folder_path = os.path.join(DOWNLOADS_PATH, folder_name)
+            if not os.path.isdir(folder_path):
+                continue
+
+            show_id = None
+            show_name = None
+
+            if re.match(r'^nyaa-[a-f0-9]{12}$', folder_name):
+                show_id = folder_name
+                show_name = folder_name
+            elif re.match(r'^allanime-[a-f0-9]{12}$', folder_name):
+                show_id = folder_name
+                show_name = folder_name
+            else:
+                bracket_match = re.search(r'^(.*?)\s*\[(nyaa-[a-f0-9]{12})\]$', folder_name)
+                if bracket_match:
+                    show_name = bracket_match.group(1).strip()
+                    show_id = bracket_match.group(2)
+                else:
+                    # Potential non-canonical folder names with known existing show_id inside?
+                    # Try to detect from existing DB entries as fallback.
+                    for item in existing:
+                        if item['show_name'] and item['show_name'].lower() in folder_name.lower():
+                            show_id = item['show_id']
+                            show_name = item['show_name']
+                            break
+
+            if not show_id:
+                continue
+
+            # Determine show_name from file when folder name alone isn't enough
+            candidate_files = []
+            for root, _, files in os.walk(folder_path):
+                for f in files:
+                    if any(f.lower().endswith(ext) for ext in VIDEO_EXTENSIONS):
+                        candidate_files.append(os.path.join(root, f))
+
+            if not candidate_files:
+                continue
+
+            if not show_name or show_name in (show_id, f"{show_id}"):
+                extracted_name = extract_show_name_from_filename(candidate_files[0])
+                if extracted_name:
+                    show_name = extracted_name
+
+            # interactive prompt for user-provided show name when still unknown or still hash id
+            if not show_name or show_name in (show_id, f"{show_id}"):
+                default_name = "" if show_name in (None, show_id) else show_name
+                show_name, ok = QInputDialog.getText(
+                    self,
+                    "Import Show Name",
+                    f"Enter show name for folder '{folder_name}' (id={show_id}):",
+                    text=default_name
+                )
+                if not ok or not show_name.strip():
+                    continue
+                show_name = show_name.strip()
+
+            # Sanitized show_name for DB
+            show_name = show_name.strip() if show_name else show_id
+
+            # let existing_id pass through; we just import new episodes if available
+            found_video = False
+            for fpath in candidate_files:
+                f = os.path.basename(fpath)
+                found_video = True
+                ep_num = extract_episode_number(f) or 0
+
+                progress = OnlineProgress(
+                    show_id=show_id,
+                    show_name=show_name,
+                    episode_number=ep_num,
+                    local_path=fpath,
+                    completed=False,
+                    allmanga_id=show_id
+                )
+
+                await self.db.update_online_progress(progress)
+                imported_episodes += 1
+
+            if found_video:
+                imported_shows += 1
+
+        self.refresh_view()
+        parent_window = getattr(self, 'main_window', None) or self.parent()
+        if parent_window and hasattr(parent_window, 'online_widget'):
+            asyncio.create_task(parent_window.online_widget.load_recent())
+
+        QMessageBox.information(
+            self,
+            "Import Complete",
+            f"Imported {imported_shows} shows and {imported_episodes} episodes."
+        )
+
